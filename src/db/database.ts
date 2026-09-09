@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
@@ -87,10 +87,15 @@ function ensureDirectory(file: string): void {
 
 ensureDirectory(env.databaseFile);
 
-export const db = new Database(env.databaseFile);
+export const db = new DatabaseSync(env.databaseFile);
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+// node:sqlite nao expoe .pragma(); os PRAGMAs vao por exec().
+// WAL nao se aplica a bancos em memoria, entao so e ligado em arquivo.
+if (env.databaseFile !== ':memory:') {
+  db.exec('PRAGMA journal_mode = WAL');
+}
+
+db.exec('PRAGMA foreign_keys = ON');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS leads (
@@ -119,6 +124,38 @@ db.exec(`
 `);
 
 log.info(`SQLite pronto em ${env.databaseFile}`);
+
+/**
+ * O node:sqlite nao tem o helper `transaction()` do better-sqlite3, entao a
+ * transacao e explicita. Sem ela, uma falha entre inserir a mensagem e somar
+ * o contador do lead deixaria os dois fora de sincronia.
+ */
+function inTransaction<T>(run: () => T): T {
+  db.exec('BEGIN');
+
+  try {
+    const result = run();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+/**
+ * O node:sqlite tipa toda linha como Record<string, SQLOutputValue>. A forma
+ * real de cada tabela e conhecida pelo schema logo acima, e os mapeadores
+ * abaixo (mapLead/mapMessage) sao o unico lugar que le esses campos — entao a
+ * conversao fica concentrada aqui em vez de espalhada por cada consulta.
+ */
+function asRow<T>(value: unknown): T | undefined {
+  return value as T | undefined;
+}
+
+function asRows<T>(value: unknown): T[] {
+  return value as T[];
+}
 
 function toStage(value: string): FunnelStage {
   return STAGE_ORDER.has(value as FunnelStage) ? (value as FunnelStage) : 'novo';
@@ -150,7 +187,7 @@ function mapMessage(row: MessageRow): StoredMessage {
 }
 
 const statements = {
-  upsertLead: db.prepare<[number, string | null, string | null, string | null]>(`
+  upsertLead: db.prepare(`
     INSERT INTO leads (chat_id, first_name, username, language_code)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(chat_id) DO UPDATE SET
@@ -159,29 +196,29 @@ const statements = {
       language_code = COALESCE(excluded.language_code, leads.language_code),
       updated_at    = datetime('now')
   `),
-  getLead: db.prepare<[number]>('SELECT * FROM leads WHERE chat_id = ?'),
-  updateStage: db.prepare<[string, number]>(`
+  getLead: db.prepare('SELECT * FROM leads WHERE chat_id = ?'),
+  updateStage: db.prepare(`
     UPDATE leads SET stage = ?, updated_at = datetime('now') WHERE chat_id = ?
   `),
-  updateNotes: db.prepare<[string | null, number]>(`
+  updateNotes: db.prepare(`
     UPDATE leads SET notes = ?, updated_at = datetime('now') WHERE chat_id = ?
   `),
-  bumpMessageCount: db.prepare<[number]>(`
+  bumpMessageCount: db.prepare(`
     UPDATE leads
        SET message_count = message_count + 1,
            updated_at    = datetime('now')
      WHERE chat_id = ?
   `),
-  insertMessage: db.prepare<[number, string, string, string | null]>(`
+  insertMessage: db.prepare(`
     INSERT INTO messages (chat_id, role, content, directive) VALUES (?, ?, ?, ?)
   `),
-  recentMessages: db.prepare<[number, number]>(`
+  recentMessages: db.prepare(`
     SELECT * FROM (
       SELECT * FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?
     ) ORDER BY id ASC
   `),
-  deleteMessages: db.prepare<[number]>('DELETE FROM messages WHERE chat_id = ?'),
-  deleteLead: db.prepare<[number]>('DELETE FROM leads WHERE chat_id = ?'),
+  deleteMessages: db.prepare('DELETE FROM messages WHERE chat_id = ?'),
+  deleteLead: db.prepare('DELETE FROM leads WHERE chat_id = ?'),
   countLeads: db.prepare('SELECT COUNT(*) AS total FROM leads'),
   countMessages: db.prepare('SELECT COUNT(*) AS total FROM messages'),
   countByStage: db.prepare('SELECT stage, COUNT(*) AS total FROM leads GROUP BY stage'),
@@ -201,7 +238,7 @@ export function upsertLead(input: {
     input.languageCode ?? null,
   );
 
-  const row = statements.getLead.get(input.chatId) as LeadRow | undefined;
+  const row = asRow<LeadRow>(statements.getLead.get(input.chatId));
 
   if (!row) {
     throw new Error(`Falha ao persistir o lead ${input.chatId}`);
@@ -211,7 +248,7 @@ export function upsertLead(input: {
 }
 
 export function getLead(chatId: number): Lead | null {
-  const row = statements.getLead.get(chatId) as LeadRow | undefined;
+  const row = asRow<LeadRow>(statements.getLead.get(chatId));
   return row ? mapLead(row) : null;
 }
 
@@ -245,7 +282,7 @@ export function addMessage(input: {
   content: string;
   directive?: string | null;
 }): void {
-  const persist = db.transaction(() => {
+  inTransaction(() => {
     statements.insertMessage.run(
       input.chatId,
       input.role,
@@ -254,13 +291,11 @@ export function addMessage(input: {
     );
     statements.bumpMessageCount.run(input.chatId);
   });
-
-  persist();
 }
 
 /** Janela de memoria enviada as duas IAs, em ordem cronologica. */
 export function getRecentMessages(chatId: number, limit = env.HISTORY_WINDOW): StoredMessage[] {
-  const rows = statements.recentMessages.all(chatId, limit) as MessageRow[];
+  const rows = asRows<MessageRow>(statements.recentMessages.all(chatId, limit));
   return rows.map(mapMessage);
 }
 
@@ -271,25 +306,23 @@ export function clearHistory(chatId: number): void {
 
 /** Remove lead e historico — usado pelo /parar, para respeitar o opt-out. */
 export function forgetLead(chatId: number): void {
-  const purge = db.transaction(() => {
+  inTransaction(() => {
     statements.deleteMessages.run(chatId);
     statements.deleteLead.run(chatId);
   });
-
-  purge();
 }
 
 export function getStats(): FunnelStats {
-  const leads = statements.countLeads.get() as { total: number };
-  const messages = statements.countMessages.get() as { total: number };
-  const stages = statements.countByStage.all() as Array<{ stage: string; total: number }>;
+  const leads = asRow<{ total: number }>(statements.countLeads.get());
+  const messages = asRow<{ total: number }>(statements.countMessages.get());
+  const stages = asRows<{ stage: string; total: number }>(statements.countByStage.all());
 
   const byStage: Record<string, number> = {};
   for (const row of stages) {
     byStage[row.stage] = row.total;
   }
 
-  return { totalLeads: leads.total, totalMessages: messages.total, byStage };
+  return { totalLeads: leads?.total ?? 0, totalMessages: messages?.total ?? 0, byStage };
 }
 
 export function closeDatabase(): void {

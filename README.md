@@ -56,6 +56,10 @@ Pontos de projeto que valem nota:
   qualquer momento (opt-out do lead).
 - **A diretriz é auditável.** Cada resposta do assistente guarda o JSON da
   diretriz que a gerou, na coluna `messages.directive`.
+- **Transação explícita.** `node:sqlite` não tem o helper `transaction()` do
+  `better-sqlite3`, então gravar a mensagem e somar o contador do lead corre
+  dentro de um `BEGIN`/`COMMIT` próprio — sem isso uma falha no meio deixaria
+  os dois fora de sincronia.
 
 ### Estágios do funil
 
@@ -71,7 +75,7 @@ cadastrado → deposito_enviado → depositado` (+ `perdido`).
 │   ├── config/
 │   │   └── env.ts            # Validação das variáveis de ambiente (zod)
 │   ├── db/
-│   │   └── database.ts       # SQLite: leads, histórico e estágios
+│   │   └── database.ts       # node:sqlite: leads, histórico e estágios
 │   ├── services/
 │   │   ├── gemini.ts         # Estrategista — gera a diretriz de vendas
 │   │   └── claude.ts         # Redator — escreve a mensagem final
@@ -113,7 +117,10 @@ Imprime a diretriz do estrategista antes da resposta do redator, que é o que
 interessa ao calibrar os prompts. Usa um SQLite separado
 (`./data/chat-harness.sqlite`) para não sujar o banco do bot.
 
-Requer Node.js 20+ (`better-sqlite3` compila um binding nativo na instalação).
+Requer **Node.js 22.5+** — a persistência usa `node:sqlite`, o SQLite embutido
+no runtime. O projeto **não tem nenhuma dependência nativa**: `npm ci` não
+dispara `node-gyp` nem compila C++, então o build funciona em qualquer
+plataforma sem toolchain (Render, Railway, Fly, containers slim).
 
 ### Variáveis obrigatórias
 
@@ -183,9 +190,34 @@ regras do programa de afiliados que você divulga.
 
 ---
 
+## Deploy
+
+O build não exige toolchain nativa, então qualquer plataforma Node serve:
+
+```
+Build command:  npm ci && npm run build
+Start command:  npm start
+```
+
+Configure as variáveis do `.env.example` no painel da plataforma e use
+`TELEGRAM_MODE=webhook` com `TELEGRAM_WEBHOOK_URL` apontando para a URL
+pública do serviço.
+
+**Atenção ao disco.** O `node:sqlite` grava num arquivo, e a maioria das
+plataformas (Render incluído) tem sistema de arquivos efêmero: sem um disco
+persistente montado, o banco é recriado a cada deploy e a cada restart, e a
+memória de todos os leads se perde. Monte um disco persistente e aponte
+`DATABASE_PATH` para dentro dele (ex.: `/var/data/funnel.sqlite`), ou troque a
+persistência por um banco gerenciado. O esquema está isolado em
+`src/db/database.ts` — só esse arquivo muda.
+
+`node:sqlite` ainda é marcado como experimental no Node 22 (ele emite um aviso
+no boot) e estável no Node 24. A API usada aqui — `DatabaseSync`, `prepare`,
+`run`/`get`/`all`, `exec` — não mudou entre as duas versões.
+
 ## Privacidade
 
-O SQLite guarda conteúdo de conversas privadas: `chat_id`, nome, username e
+O banco guarda conteúdo de conversas privadas: `chat_id`, nome, username e
 todas as mensagens. Trate o arquivo como dado pessoal — ele fica fora do git
 (`data/` está no `.gitignore`), deve ficar em volume com backup controlado, e
 `/parar` existe para atender pedidos de exclusão.

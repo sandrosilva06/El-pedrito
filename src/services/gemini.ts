@@ -1,9 +1,4 @@
-import {
-  GoogleGenerativeAI,
-  SchemaType,
-  type GenerativeModel,
-  type ResponseSchema,
-} from '@google/generative-ai';
+import { GoogleGenAI, ThinkingLevel, Type, type Schema } from '@google/genai';
 
 import { env } from '../config/env';
 import { FUNNEL_STAGES, type FunnelStage, type Lead, type StoredMessage } from '../db/database';
@@ -38,24 +33,23 @@ export interface SalesDirective {
   shouldStop: boolean;
 }
 
-const responseSchema: ResponseSchema = {
-  type: SchemaType.OBJECT,
+const responseSchema: Schema = {
+  type: Type.OBJECT,
   properties: {
-    intent: { type: SchemaType.STRING, description: 'Intencao do lead em uma frase' },
+    intent: { type: Type.STRING, description: 'Intencao do lead em uma frase' },
     stage: {
-      type: SchemaType.STRING,
-      format: 'enum',
+      type: Type.STRING,
       enum: [...FUNNEL_STAGES],
       description: 'Estagio do funil apos esta mensagem',
     },
-    objection: { type: SchemaType.STRING, description: 'Objecao principal ou "nenhuma"' },
-    temperature: { type: SchemaType.NUMBER, description: 'Interesse de 0 a 100' },
-    directive: { type: SchemaType.STRING, description: 'Instrucao de vendas para o redator' },
-    cta: { type: SchemaType.STRING, description: 'Proximo passo pedido ao lead' },
-    tone: { type: SchemaType.STRING, description: 'Tom sugerido para a resposta' },
-    includeLink: { type: SchemaType.BOOLEAN, description: 'Incluir o link de afiliado?' },
-    notes: { type: SchemaType.STRING, description: 'Fatos a memorizar sobre o lead' },
-    shouldStop: { type: SchemaType.BOOLEAN, description: 'O lead pediu para parar?' },
+    objection: { type: Type.STRING, description: 'Objecao principal ou "nenhuma"' },
+    temperature: { type: Type.NUMBER, description: 'Interesse de 0 a 100' },
+    directive: { type: Type.STRING, description: 'Instrucao de vendas para o redator' },
+    cta: { type: Type.STRING, description: 'Proximo passo pedido ao lead' },
+    tone: { type: Type.STRING, description: 'Tom sugerido para a resposta' },
+    includeLink: { type: Type.BOOLEAN, description: 'Incluir o link de afiliado?' },
+    notes: { type: Type.STRING, description: 'Fatos a memorizar sobre o lead' },
+    shouldStop: { type: Type.BOOLEAN, description: 'O lead pediu para parar?' },
   },
   required: [
     'intent',
@@ -100,24 +94,11 @@ LIMITES INEGOCIAVEIS (violar invalida a diretriz):
   shouldStop=true e uma diretriz de encerramento cordial.
 - Urgencia so pode ser real. Nao invente prazos ou vagas limitadas.`;
 
-let cachedModel: GenerativeModel | null = null;
+let cachedClient: GoogleGenAI | null = null;
 
-function getModel(): GenerativeModel {
-  if (!cachedModel) {
-    const client = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-    cachedModel = client.getGenerativeModel({
-      model: env.GEMINI_MODEL,
-      systemInstruction: SYSTEM_INSTRUCTION,
-      generationConfig: {
-        temperature: 0.4,
-        maxOutputTokens: 900,
-        responseMimeType: 'application/json',
-        responseSchema,
-      },
-    });
-  }
-
-  return cachedModel;
+function getClient(): GoogleGenAI {
+  cachedClient ??= new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+  return cachedClient;
 }
 
 function renderHistory(history: StoredMessage[]): string {
@@ -163,6 +144,15 @@ function fallbackDirective(lead: Lead): SalesDirective {
   };
 }
 
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+function isRetryable(error: unknown): boolean {
+  const status = (error as { status?: unknown })?.status;
+  return typeof status === 'number' && RETRYABLE_STATUS.has(status);
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Etapa 1 da cadeia: o Gemini le o contexto e devolve a diretriz de vendas.
  * Nunca lanca — em caso de erro devolve uma diretriz conservadora.
@@ -191,9 +181,61 @@ Devolva apenas o JSON da diretriz.`;
 
   const startedAt = Date.now();
 
-  try {
-    const result = await getModel().generateContent(prompt);
-    const raw = result.response.text();
+  // O 503 "high demand" do Gemini e comum e transitorio. Sem retry ele vira
+  // um turno perdido com o lead, entao tentamos de novo com backoff curto —
+  // curto porque do outro lado tem alguem olhando o "digitando...".
+  const MAX_ATTEMPTS = 3;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await requestDirective({ lead, prompt, startedAt });
+    } catch (error) {
+      if (attempt < MAX_ATTEMPTS && isRetryable(error)) {
+        const backoff = 400 * 2 ** (attempt - 1);
+        log.warn(`estrategista indisponivel (tentativa ${attempt}/${MAX_ATTEMPTS}); nova tentativa em ${backoff}ms`);
+        await sleep(backoff);
+        continue;
+      }
+
+      log.error('falha ao gerar a diretriz; usando fallback', error);
+      return fallbackDirective(lead);
+    }
+  }
+
+  return fallbackDirective(lead);
+}
+
+async function requestDirective(params: {
+  lead: Lead;
+  prompt: string;
+  startedAt: number;
+}): Promise<SalesDirective> {
+  const { lead, prompt, startedAt } = params;
+
+  {
+    const result = await getClient().models.generateContent({
+      model: env.GEMINI_MODEL,
+      contents: prompt,
+      config: {
+        systemInstruction: SYSTEM_INSTRUCTION,
+        temperature: 0.4,
+        // Os modelos Gemini 3.x raciocinam antes de responder, e o thinking
+        // consome o mesmo orcamento de saida: com pouco espaco o JSON volta
+        // truncado. O estrategista precisa de latencia baixa, nao de
+        // raciocinio profundo — quem decide ja recebe o contexto pronto.
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+        maxOutputTokens: 4096,
+        responseMimeType: 'application/json',
+        responseSchema,
+      },
+    });
+
+    const raw = result.text;
+
+    if (!raw) {
+      throw new Error('resposta vazia do estrategista');
+    }
+
     const parsed = JSON.parse(raw) as Record<string, unknown>;
 
     const directive: SalesDirective = {
@@ -217,8 +259,5 @@ Devolva apenas o JSON da diretriz.`;
     });
 
     return directive;
-  } catch (error) {
-    log.error('falha ao gerar a diretriz; usando fallback', error);
-    return fallbackDirective(lead);
   }
 }

@@ -49,10 +49,10 @@ const schema = z
     TELEGRAM_WEBHOOK_SECRET: optionalString,
 
     GEMINI_API_KEY: requiredString('GEMINI_API_KEY'),
-    GEMINI_MODEL: optionalString.transform((value) => value ?? 'gemini-2.0-flash'),
+    GEMINI_MODEL: optionalString.transform((value) => value ?? 'gemini-3.6-flash'),
 
     ANTHROPIC_API_KEY: requiredString('ANTHROPIC_API_KEY'),
-    ANTHROPIC_MODEL: optionalString.transform((value) => value ?? 'claude-sonnet-5'),
+    ANTHROPIC_MODEL: optionalString.transform((value) => value ?? 'claude-opus-5'),
     ANTHROPIC_MAX_TOKENS: intFromString(700, 128, 8192),
 
     DATABASE_PATH: optionalString.transform((value) => value ?? './data/funnel.sqlite'),

@@ -155,7 +155,11 @@ export async function writeReply(params: {
     const response = await getClient().messages.create({
       model: env.ANTHROPIC_MODEL,
       max_tokens: env.ANTHROPIC_MAX_TOKENS,
-      temperature: 0.8,
+      // Sampling (temperature/top_p/top_k) foi removido nos modelos atuais e
+      // retorna 400. A variacao de tom vem do prompt e da diretriz, nao daqui.
+      // Effort baixo mantem a latencia curta: quem raciocina e o Gemini, o
+      // Claude so redige 1-3 frases.
+      output_config: { effort: 'low' },
       system: [
         { type: 'text', text: PERSONA },
         { type: 'text', text: buildDirectiveBlock(directive, lead) },

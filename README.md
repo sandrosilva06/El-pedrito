@@ -5,8 +5,10 @@ Backend autônomo de um funil de vendas no Telegram, construído sobre uma
 
 | Papel | Modelo | Responsabilidade |
 | --- | --- | --- |
-| **Estrategista** | Gemini | Lê o histórico, classifica intenção/objeção/estágio e devolve uma **diretriz de vendas** em JSON. Nunca fala com o lead. |
-| **Redator** | Claude | Recebe a diretriz e o histórico e escreve a **mensagem final**, informal e persuasiva, que vai para o lead. |
+| **Estrategista** | Gemini (`gemini-3.6-flash`) | Lê o histórico, classifica intenção/objeção/estágio e devolve uma **diretriz de vendas** em JSON. Nunca fala com o lead. |
+| **Redator** | Claude (`claude-opus-5`) | Recebe a diretriz e o histórico e escreve a **mensagem final**, informal e persuasiva, que vai para o lead. |
+
+Ambos os modelos são trocáveis por `GEMINI_MODEL` / `ANTHROPIC_MODEL` no `.env`.
 
 O objetivo do funil é levar o lead do primeiro contato até o cadastro e o
 primeiro depósito na plataforma de afiliados configurada.
@@ -41,6 +43,14 @@ Pontos de projeto que valem nota:
   conservadora assume (pergunta de qualificação, sem link). Se o Claude
   falhar, o lead recebe uma mensagem de "travou aqui" em vez de silêncio.
   Nenhum dos dois serviços lança exceção para cima.
+- **Retry no estrategista.** O Gemini devolve `503 high demand` com alguma
+  frequência; sem retry isso vira um turno perdido com o lead. São até 3
+  tentativas com backoff curto (400ms, 800ms) — curto porque do outro lado
+  tem alguém olhando o "digitando...".
+- **Sem `temperature` no Claude.** Os modelos atuais removeram os parâmetros
+  de sampling e retornam 400 se eles vierem na requisição. A variação de tom
+  vem do prompt e da diretriz. `output_config.effort: 'low'` mantém a
+  latência curta: quem raciocina é o Gemini, o Claude só redige 1-3 frases.
 - **Estágio só avança.** `advanceStage` ignora retrocessos causados por
   classificação ruidosa do Gemini. A única exceção é `perdido`, marcável a
   qualquer momento (opt-out do lead).
@@ -91,6 +101,17 @@ Produção:
 npm run build
 npm start
 ```
+
+### Testar a cadeia sem o Telegram
+
+```bash
+npm run chat                       # REPL interativo
+npm run chat -- "me manda o link"  # turnos roteirizados
+```
+
+Imprime a diretriz do estrategista antes da resposta do redator, que é o que
+interessa ao calibrar os prompts. Usa um SQLite separado
+(`./data/chat-harness.sqlite`) para não sujar o banco do bot.
 
 Requer Node.js 20+ (`better-sqlite3` compila um binding nativo na instalação).
 

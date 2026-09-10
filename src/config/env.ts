@@ -29,13 +29,23 @@ const intFromString = (fallback: number, min: number, max: number) =>
       `deve ser um inteiro entre ${min} e ${max}`,
     );
 
+/**
+ * Canal de administracao para onde vao os comprovativos. Fica como default no
+ * codigo para o reencaminhamento funcionar mesmo num deploy onde a variavel
+ * nao foi configurada — sem destino, o print e guardado e ninguem e avisado.
+ * A variavel de ambiente, quando existe, continua a ganhar.
+ */
+const DEFAULT_ADMIN_CHAT_IDS = [-1_004_453_145_425];
+
 const csvNumbers = optionalString.transform((value) =>
   value === undefined
-    ? []
+    ? DEFAULT_ADMIN_CHAT_IDS
     : value
         .split(',')
         .map((part) => Number(part.trim()))
-        .filter((part) => Number.isFinite(part)),
+        // Ids de grupo e canal sao negativos e grandes; acima de 2^53 o Number
+        // perde precisao e a mensagem iria para um chat que nao existe.
+        .filter((part) => Number.isSafeInteger(part)),
 );
 
 const schema = z

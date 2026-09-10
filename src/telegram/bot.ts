@@ -274,6 +274,7 @@ bot.on([':photo', ':document'], async (ctx) => {
   const isPdfDocument = document?.mime_type === 'application/pdf';
 
   const fileId = photo?.file_id ?? (isImageDocument || isPdfDocument ? document?.file_id : undefined);
+  const fileKind: 'photo' | 'document' = photo ? 'photo' : 'document';
 
   if (!fileId) {
     await ctx.reply('Manda antes um print ou uma foto do comprovativo, se faz favor.');
@@ -310,37 +311,63 @@ bot.on([':photo', ':document'], async (ctx) => {
       `username=${lead.username ? '@' + lead.username : '?'} aguarda validacao manual`,
   );
 
-  await notifyAdmins(proof.id, lead, fileId);
+  await notifyAdmins(proof.id, lead, fileId, fileKind);
 });
 
 /**
  * Encaminha o comprovativo a quem valida. Sem isto o registo ficaria so na base
  * de dados e o lead esperaria por alguem que nao sabe que ele existe.
  */
-async function notifyAdmins(proofId: number, lead: Lead, fileId: string): Promise<void> {
+async function notifyAdmins(
+  proofId: number,
+  lead: Lead,
+  fileId: string,
+  fileKind: 'photo' | 'document',
+): Promise<void> {
   if (adminChatIds.size === 0) {
-    log.warn('ADMIN_CHAT_IDS vazio: comprovativo guardado, mas ninguem foi avisado');
+    log.error('sem destino de administracao: comprovativo guardado, mas ninguem foi avisado');
     return;
   }
 
   const caption =
-    `Comprovativo #${proofId} para validar\n` +
-    `Lead: ${lead.firstName ?? '(sem nome)'}${lead.username ? ` (@${lead.username})` : ''}\n` +
-    `chat_id: ${lead.chatId}\n` +
-    `Estagio: comprovativo_recebido`;
+    `Comprovativo #${proofId} — validacao manual\n\n` +
+    `Nome: ${lead.firstName ?? '(sem nome)'}\n` +
+    `Username: ${lead.username ? `@${lead.username}` : '(sem username)'}\n` +
+    `ID: ${lead.chatId}`;
+
+  let delivered = 0;
 
   for (const adminId of adminChatIds) {
     try {
-      // Reenvia por file_id: nao ha download nem reupload do ficheiro.
-      await bot.api.sendPhoto(adminId, fileId, { caption });
+      // Reenvia por file_id: sem download nem reupload do ficheiro. Um PDF
+      // enviado por sendPhoto seria recusado, dai distinguir o tipo.
+      if (fileKind === 'photo') {
+        await bot.api.sendPhoto(adminId, fileId, { caption });
+      } else {
+        await bot.api.sendDocument(adminId, fileId, { caption });
+      }
+
+      delivered += 1;
     } catch (error) {
-      // Pode nao ser uma foto (PDF), ou o admin pode nunca ter falado com o bot.
+      log.error(`falha ao enviar o comprovativo #${proofId} para ${adminId}`, error);
+
+      // Sem o ficheiro, pelo menos os dados do lead chegam — dao para o
+      // encontrar a mao pelo ID.
       try {
-        await bot.api.sendMessage(adminId, caption);
+        await bot.api.sendMessage(adminId, `${caption}\n\n(o ficheiro nao pode ser reenviado)`);
+        delivered += 1;
       } catch (fallbackError) {
-        log.error(`falha ao avisar o admin ${adminId} do comprovativo #${proofId}`, fallbackError);
+        log.error(`nem o aviso de texto chegou a ${adminId}`, fallbackError);
       }
     }
+  }
+
+  if (delivered === 0) {
+    // O lead ficou a espera de uma validacao que nao foi pedida a ninguem.
+    log.error(
+      `comprovativo #${proofId} nao chegou a nenhum destino de administracao. ` +
+        'Confirma que o bot pertence ao grupo/canal e tem permissao para publicar.',
+    );
   }
 }
 

@@ -91,13 +91,31 @@ explicação de cada vez), `recetivo` (vai direto ao passo seguinte),
 Quando o lead envia uma foto ou um ficheiro de imagem/PDF, o bot **não aprova
 nada**: guarda o `file_id` da versão de maior resolução em `deposit_proofs`
 como `pendente`, avança o estágio, responde que a validação está em curso, e
-reencaminha o comprovativo para cada chat em `ADMIN_CHAT_IDS` com o id, nome e
-`chat_id` do lead. Aprovar automaticamente daria acesso a quem enviasse
-qualquer imagem.
+reencaminha-o para cada destino em `ADMIN_CHAT_IDS`. Aprovar automaticamente
+daria acesso a quem enviasse qualquer imagem.
 
-Com `ADMIN_CHAT_IDS` vazio o print é guardado mas **ninguém é avisado** — o
-lead fica à espera de uma validação que ninguém sabe que existe. O boot avisa
-disso no log.
+A legenda que acompanha cada comprovativo:
+
+```
+Comprovativo #12 — validacao manual
+
+Nome: Sandro
+Username: @sandro06
+ID: 4242
+```
+
+Fotos seguem por `sendPhoto` e PDFs por `sendDocument` — um PDF enviado como
+foto seria recusado pelo Telegram. Ambos por `file_id`, sem download nem
+reupload.
+
+`ADMIN_CHAT_IDS` aceita ids de pessoa e de grupo/canal (negativos). O default
+no código é o canal de administração, para o reencaminhamento funcionar mesmo
+num deploy onde a variável não foi configurada.
+
+**O bot tem de pertencer ao grupo/canal e ter permissão para publicar lá.**
+Sem isso o print fica guardado como `pendente` mas não chega a ninguém, e o
+lead espera por uma validação que ninguém pediu. Quando nenhum destino
+recebe, o log regista o erro explicitamente.
 
 ---
 

@@ -109,6 +109,24 @@ O marcador **não é gravado no histórico**: contar `/start` como turno faria a
 sequência de abordagem saltar fases a cada clique, e quem carregasse cinco
 vezes chegaria ao link sem nunca ter falado.
 
+### Ritmo de chat
+
+A resposta não sai num bloco. O redator escreve em mensagens separadas por
+linha em branco, e `splitIntoBubbles()` converte-as no que o lead recebe:
+`typing` durante 7-8s → mensagem → pausa de 1-2s → repete, até 4 mensagens.
+
+A instrução no prompt é uma preferência; a função é a garantia. Um parágrafo
+único é partido por frases, com os URLs protegidos — o link de afiliado tem
+pontos, e um divisor ingénuo entregava meia ligação.
+
+O `typing` do Telegram expira em ~5s, por isso é reenviado a meio de cada
+mensagem; sem isso o lead via o estado desaparecer e a mensagem chegar do nada.
+
+**A entrega corre em segundo plano.** Levar ~35 segundos com o pedido HTTP
+aberto faria o Telegram dar a entrega por falhada e reenviar o update — o lead
+receberia a conversa em duplicado. A fila por chat continua a serializar, por
+isso a ordem mantém-se.
+
 ### Objeções com resposta fixa
 
 | Objeção | Ângulo |

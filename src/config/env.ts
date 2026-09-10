@@ -132,6 +132,16 @@ const schema = z
         'Conteudo para maiores de 18 anos. Aposta apenas o que podes perder.',
     ),
 
+    // --- Ritmo de chat ------------------------------------------------------
+    /** Quantas mensagens curtas, no maximo, por resposta. */
+    MAX_BUBBLES: intFromString(4, 1, 8),
+    /** Duracao do "a escrever..." antes de cada mensagem, em ms. */
+    TYPING_MS_MIN: intFromString(7000, 0, 60000),
+    TYPING_MS_MAX: intFromString(8000, 0, 60000),
+    /** Pausa depois de enviar, antes de comecar a escrever a seguinte. */
+    BUBBLE_PAUSE_MS_MIN: intFromString(1000, 0, 30000),
+    BUBBLE_PAUSE_MS_MAX: intFromString(2000, 0, 30000),
+
     // --- Remarketing -------------------------------------------------------
     /** Liga/desliga o envio automatico. */
     REMARKETING_ENABLED: optionalString.transform((value) => value !== 'false'),

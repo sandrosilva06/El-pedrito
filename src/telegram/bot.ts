@@ -16,6 +16,7 @@ import {
   type Lead,
 } from '../db/database';
 import { planStrategy, type SalesDirective } from '../services/strategist';
+import { splitIntoBubbles } from '../services/writer';
 import { writeReply } from '../services/writer';
 import { createLogger } from '../utils/logger';
 import { nextOccurrenceUtc } from '../utils/timezone';
@@ -120,6 +121,52 @@ async function reply(ctx: Context, text: string): Promise<void> {
   }
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const randomBetween = (min: number, max: number) =>
+  min + Math.floor(Math.random() * Math.max(1, max - min + 1));
+
+/**
+ * O "a escrever..." do Telegram expira ao fim de ~5s. Para o mostrar durante
+ * os 7-8s de uma mensagem e preciso reenvia-lo pelo caminho, senao o lead ve
+ * o estado desaparecer e a mensagem chegar do nada.
+ */
+async function typeFor(ctx: Context, totalMs: number): Promise<void> {
+  const REFRESH_MS = 4_500;
+  let elapsed = 0;
+
+  while (elapsed < totalMs) {
+    await ctx.replyWithChatAction('typing').catch(() => undefined);
+    const step = Math.min(REFRESH_MS, totalMs - elapsed);
+    await sleep(step);
+    elapsed += step;
+  }
+}
+
+/**
+ * Entrega a resposta ao ritmo de quem escreve no telemovel: uma mensagem de
+ * cada vez, com o "a escrever..." antes de cada uma e uma pausa entre elas.
+ *
+ * Um bloco unico entregue de golpe denuncia o bot mais depressa do que
+ * qualquer erro de portugues — ninguem escreve quatro frases num instante.
+ */
+async function sendHumanPaced(ctx: Context, text: string): Promise<void> {
+  const bubbles = splitIntoBubbles(text, env.MAX_BUBBLES);
+
+  for (const [index, bubble] of bubbles.entries()) {
+    await typeFor(ctx, randomBetween(env.TYPING_MS_MIN, env.TYPING_MS_MAX));
+
+    for (const chunk of splitMessage(bubble)) {
+      await ctx.reply(chunk, { link_preview_options: { is_disabled: true } });
+    }
+
+    // Pausa entre mensagens, menos depois da ultima: nada se segue.
+    if (index < bubbles.length - 1) {
+      await sleep(randomBetween(env.BUBBLE_PAUSE_MS_MIN, env.BUBBLE_PAUSE_MS_MAX));
+    }
+  }
+}
+
 /**
  * Mantem o "digitando..." vivo enquanto a cadeia de IA roda. O status expira em
  * ~5s no Telegram, e a cadeia costuma levar mais que isso.
@@ -156,7 +203,7 @@ bot.command('start', async (ctx) => {
     }
 
     log.info(`/start de lead recorrente chat=${lead.chatId} estagio=${lead.stage}`);
-    await runFunnelTurn(ctx, lead.chatId, RETURNING_MARKER, { storeIncoming: false });
+    dispatchFunnelTurn(ctx, lead.chatId, RETURNING_MARKER, { storeIncoming: false });
     return;
   }
 
@@ -169,7 +216,7 @@ bot.command('start', async (ctx) => {
     'já costumas acompanhar apostas desportivas ou seria a primeira vez?';
 
   addMessage({ chatId: lead.chatId, role: 'assistant', content: greeting });
-  await reply(ctx, greeting);
+  dispatchMessage(ctx, lead.chatId, greeting);
 });
 
 bot.command('reset', async (ctx) => {
@@ -244,6 +291,36 @@ const RETURNING_MARKER = '[o lead voltou e carregou em /start; nao escreveu nada
  * grava o resultado e responde. Partilhado entre as mensagens de texto e o
  * /start de quem volta, para os dois caminhos nao divergirem.
  */
+/**
+ * Entrega uma mensagem ja escrita, ao ritmo humano e sem prender o pedido
+ * HTTP. Passa pela fila do chat para nao se cruzar com um turno em curso.
+ */
+function dispatchMessage(ctx: Context, chatId: number, text: string): void {
+  void enqueue(chatId, () => sendHumanPaced(ctx, text)).catch((error: unknown) => {
+    log.error(`falha ao entregar mensagem ao chat ${chatId}`, error);
+  });
+}
+
+/**
+ * Despacha o turno sem prender o pedido HTTP.
+ *
+ * A entrega ritmada leva dezenas de segundos e o webhook do Telegram tem de
+ * responder depressa: segurando a resposta, o Telegram considera a entrega
+ * falhada e reenvia o mesmo update — o lead receberia a conversa em
+ * duplicado. A fila por chat continua a serializar, portanto a ordem das
+ * mensagens mantem-se.
+ */
+function dispatchFunnelTurn(
+  ctx: Context,
+  chatId: number,
+  incoming: string,
+  options: { storeIncoming: boolean },
+): void {
+  void runFunnelTurn(ctx, chatId, incoming, options).catch((error: unknown) => {
+    log.error(`falha no turno do chat ${chatId}`, error);
+  });
+}
+
 async function runFunnelTurn(
   ctx: Context,
   chatId: number,
@@ -284,7 +361,7 @@ async function runFunnelTurn(
       }
 
       stopTyping();
-      await reply(ctx, answer);
+      await sendHumanPaced(ctx, answer);
 
       log.info(`respondido chat=${chatId} estagio=${directive.stage}`);
     } finally {
@@ -307,7 +384,7 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  await runFunnelTurn(ctx, lead.chatId, incomingRaw.slice(0, MAX_INCOMING_LENGTH), {
+  dispatchFunnelTurn(ctx, lead.chatId, incomingRaw.slice(0, MAX_INCOMING_LENGTH), {
     storeIncoming: true,
   });
 });
@@ -367,7 +444,7 @@ bot.on([':photo', ':document'], async (ctx) => {
     'e já te liberto o acesso ao grupo VIP.';
 
   addMessage({ chatId: lead.chatId, role: 'assistant', content: answer });
-  await ctx.reply(answer);
+  dispatchMessage(ctx, lead.chatId, answer);
 
   log.info(
     `comprovativo #${proof.id} recebido — chat=${lead.chatId} nome=${lead.firstName ?? '?'} ` +

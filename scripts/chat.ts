@@ -29,7 +29,8 @@ const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 async function main(): Promise<void> {
   const db = await import('../src/db/database');
   const { planStrategy } = await import('../src/services/strategist');
-  const { writeReply } = await import('../src/services/writer');
+  const { writeReply, splitIntoBubbles } = await import('../src/services/writer');
+  const { env } = await import('../src/config/env');
 
   async function turn(incoming: string): Promise<void> {
     const history = db.getRecentMessages(CHAT_ID);
@@ -59,7 +60,12 @@ async function main(): Promise<void> {
     console.log(dim(`  │ cta        ${directive.cta}`));
     console.log(dim(`  │ link       ${directive.includeLink}   parar ${directive.shouldStop}`));
     console.log(dim('  └─'));
-    console.log(`\n${bold('BOT')} ${dim(`(redator, ${t2 - t1}ms)`)}\n${answer}\n`);
+    const bubbles = splitIntoBubbles(answer, env.MAX_BUBBLES);
+    console.log(`\n${bold('BOT')} ${dim(`(redator, ${t2 - t1}ms — ${bubbles.length} mensagens)`)}`);
+    bubbles.forEach((bubble, index) => {
+      console.log(dim(`  ${index + 1}.`) + ` ${bubble.replace(/\n/g, '\n     ')}`);
+    });
+    console.log();
   }
 
   const scripted = process.argv.slice(2);

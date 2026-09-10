@@ -42,12 +42,26 @@ IDIOMA — PORTUGUES DE PORTUGAL, SEM EXCECOES:
   time, cadastro, tela, "a gente" no sentido de "nos", "pra" (escreve "para").
 - Moeda em euros.
 
-COMO ESCREVES:
-- CURTO. No maximo 3 frases, e curtas. Uma mensagem de telemovel, nao um
-  texto de vendas. Se tens mais para dizer, escolhe o essencial e guarda o
-  resto para a proxima mensagem — o lead responde e tu continuas.
-- Nunca escrevas paragrafos longos nem varias ideias na mesma frase.
-- No maximo uma pergunta por mensagem.
+COMO ESCREVES — EM MENSAGENS SEPARADAS:
+- Escreves como quem manda mensagens no telemovel: varias curtas seguidas, nao
+  um paragrafo comprido. NUNCA um testamento.
+- Divide a resposta em 2 a ${env.MAX_BUBBLES} mensagens, SEPARADAS POR UMA
+  LINHA EM BRANCO. Cada linha em branco e uma mensagem nova que o lead vai
+  receber a parte.
+- Cada mensagem: 1 a 2 frases curtas, uma ideia so. Se tens duas ideias, sao
+  duas mensagens.
+- A ultima costuma ser a pergunta, sozinha.
+- Cada mensagem tem de fazer sentido solta, sem depender da anterior para se
+  perceber. Nao partas uma frase a meio entre duas mensagens.
+- Exemplo de ritmo, para uma explicacao de custo:
+    Nao me pagas nada a mim, o grupo e gratuito.
+    (linha em branco)
+    O que precisas e de ter saldo na conta para apostares — e dinheiro teu.
+    (linha em branco)
+    E como carregares o telemovel: o saldo fica la para o usares.
+    (linha em branco)
+    Faz sentido para ti?
+- No maximo uma pergunta em toda a resposta.
 - Trata SEMPRE o lead pelo nome quando o souberes.
 - Sem markdown, sem titulos, sem bullets, sem assinatura, sem emoji a mais
   (no maximo um, e so quando encaixa).
@@ -262,6 +276,81 @@ function toGeminiContents(history: StoredMessage[]): Content[] {
   }
 
   return contents;
+}
+
+/** Acima disto, um bloco ainda parece um testamento e vale a pena parti-lo. */
+const LONG_BUBBLE_CHARS = 200;
+
+/**
+ * Parte um texto em frases sem partir URLs. O link de afiliado tem pontos
+ * (dominio, extensao, parametros) e um divisor ingenuo cortava-o ao meio —
+ * o lead recebia meia ligacao, que nao abre.
+ */
+function splitSentences(text: string): string[] {
+  const urls: string[] = [];
+  const masked = text.replace(/https?:\/\/\S+/g, (url) => {
+    urls.push(url);
+    return `\u0000${urls.length - 1}\u0000`;
+  });
+
+  const restore = (part: string) =>
+    part.replace(/\u0000(\d+)\u0000/g, (_, index: string) => urls[Number(index)] ?? '');
+
+  return masked
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => restore(part).trim())
+    .filter((part) => part.length > 0);
+}
+
+/**
+ * Converte a resposta do redator nas mensagens que o lead vai receber.
+ *
+ * A linha em branco e a separacao que o modelo produz naturalmente, e e o que
+ * a persona lhe pede. Mas um modelo que devolva um paragrafo unico nao pode
+ * resultar num testamento, por isso os blocos compridos sao partidos por
+ * frases — a instrucao de prompt e uma preferencia, esta funcao e a garantia.
+ */
+export function splitIntoBubbles(text: string, maxBubbles: number): string[] {
+  const blocks = text
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+
+  const expanded: string[] = [];
+
+  for (const block of blocks) {
+    if (block.length <= LONG_BUBBLE_CHARS) {
+      expanded.push(block);
+      continue;
+    }
+
+    const sentences = splitSentences(block);
+    let buffer = '';
+
+    for (const sentence of sentences) {
+      // Junta frases curtas seguidas: uma mensagem com tres palavras nao
+      // parece alguem a escrever, parece uma falha.
+      const candidate = buffer ? `${buffer} ${sentence}` : sentence;
+
+      if (candidate.length > LONG_BUBBLE_CHARS && buffer) {
+        expanded.push(buffer);
+        buffer = sentence;
+      } else {
+        buffer = candidate;
+      }
+    }
+
+    if (buffer) expanded.push(buffer);
+  }
+
+  if (expanded.length === 0) return [text.trim()].filter((part) => part.length > 0);
+  if (expanded.length <= maxBubbles) return expanded;
+
+  // Excedentes vao para a ultima: cortar perderia texto, e o aviso legal e a
+  // pergunta final costumam ser as ultimas linhas.
+  const kept = expanded.slice(0, maxBubbles - 1);
+  kept.push(expanded.slice(maxBubbles - 1).join('\n\n'));
+  return kept;
 }
 
 /** Resposta usada quando o redator falha, para o lead nunca ficar no vacuo. */

@@ -97,12 +97,21 @@ const schema = z
     /** Quantas entradas o grupo envia por dia. */
     TIPS_PER_DAY: intFromString(8, 1, 100),
     /**
-     * Afirmacao sobre taxa de acerto. Fica em variavel porque e um numero de
-     * negocio: o redator tem instrucao de nunca inventar percentagens, entao
-     * so diz o que estiver aqui. Vazio = fala de assertividade em termos
-     * qualitativos, sem numeros.
+     * Marco de assertividade citado como prova social. Fica em variavel, e nao
+     * fixo no prompt, porque e uma afirmacao de facto sobre resultados: o
+     * redator tem instrucao de nunca inventar numeros e so diz o que estiver
+     * aqui. Vazio = fala de assertividade sem numeros.
      */
-    HIT_RATE_CLAIM: optionalString.transform((value) => value ?? ''),
+    HIT_RATE_CLAIM: optionalString.transform(
+      (value) => value ?? 'no ultimo Mundial batemos 30 greens seguidos',
+    ),
+    /**
+     * Volume levantado pela comunidade, citado como prova social. Mesma regra:
+     * o bot so afirma o que estiver configurado aqui.
+     */
+    PAYOUT_CLAIM: optionalString.transform(
+      (value) => value ?? 'a malta ja levantou mais de 300.000€ da plataforma',
+    ),
     MIN_AGE: intFromString(18, 0, 99),
     COMPLIANCE_NOTE: optionalString.transform(
       (value) =>

@@ -78,6 +78,35 @@ deposito_enviado → comprovativo_recebido → acesso_liberado` (+ `perdido`).
 Os nomes antigos (`cadastro_enviado`, `cadastrado`, `depositado`) são mapeados
 na leitura, para um lead a meio do funil não voltar a `novo` no primeiro deploy.
 
+### Sequência de abordagem
+
+A ordem importa mais do que o argumento, e é imposta em dois sítios:
+
+| Turno | Conteúdo | Proibido |
+| --- | --- | --- |
+| 1-2 | Rapport: nome, cantão, há quanto tempo na Suíça | Registo, depósito, link, valores, nome da plataforma |
+| 3 | Comunidade e resultados do grupo | Condição de entrada, link |
+| 4+ | Condição de entrada: gratuita, conta na plataforma, depósito mínimo | — |
+| Depois | Pedido do print para libertar o acesso | Aprovar sem validação humana |
+
+O estrategista recebe o número do turno e a sequência no prompt. Mas a
+interdição das fases iniciais é **determinística**, calculada em
+`phaseRule()` — é o único ponto do funil onde uma classificação errada custa o
+lead na hora: pedir dinheiro à segunda mensagem queima a conversa e não há
+volta. Com o estrategista em fallback, um lead que pergunte o preço no turno 1
+continua a receber uma pergunta sobre o cantão, não um link.
+
+A sequência pode andar mais devagar, nunca mais depressa. E quem já se
+registou nunca é travado pelo turno.
+
+### Prova social
+
+`HIT_RATE_CLAIM` e `PAYOUT_CLAIM` guardam as afirmações de resultados citadas
+antes do pedido de depósito. Ficam em variáveis, e não fixas no prompt, porque
+são afirmações de facto que o bot repete tal e qual ao lead — com as duas
+vazias, ele fala de assertividade sem citar números. O redator continua
+proibido de inventar qualquer outro valor.
+
 ### Perfil do lead
 
 O estrategista classifica cada lead e o redator adapta-se: `cetico`

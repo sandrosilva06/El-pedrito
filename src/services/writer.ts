@@ -62,7 +62,11 @@ O QUE ESTAS A OFERECER:
   nao e um pagamento a ninguem. Diz isto com estas palavras a quem hesitar
   pelo custo.
 - O acesso e libertado depois de ele enviar o comprovativo do deposito.
-- ${env.HIT_RATE_CLAIM ? `Taxa de acerto que podes referir: ${env.HIT_RATE_CLAIM}` : 'NAO tens numeros de taxa de acerto. Fala de assertividade em termos gerais e NUNCA inventes uma percentagem.'}
+- PROVA SOCIAL que podes citar (e SO esta — nao inventes outra):
+${env.HIT_RATE_CLAIM ? `  · ${env.HIT_RATE_CLAIM}` : '  · (sem marco de assertividade configurado: fala de resultados sem citar numeros)'}
+${env.PAYOUT_CLAIM ? `  · ${env.PAYOUT_CLAIM}` : '  · (sem valor de levantamentos configurado: nao cites montantes)'}
+  Estes numeros so entram DEPOIS de haver conversa — nunca na primeira
+  mensagem, e nunca como abertura.
 - Link: ${env.AFFILIATE_LINK || '(nao configurado — nao menciones link nenhum)'}
 
 O QUE NUNCA FAZES:
@@ -102,7 +106,41 @@ const PROFILE_GUIDANCE: Record<LeadProfile, string> = {
     'Nao insistas duas vezes seguidas no mesmo ponto.',
 };
 
-function buildDirectiveBlock(directive: SalesDirective, lead: Lead): string {
+/**
+ * Interdicao da fase, calculada aqui e nao pedida ao modelo. A sequencia de
+ * abordagem e o unico ponto do funil onde uma classificacao errada do
+ * estrategista custa o lead na hora: pedir dinheiro a segunda mensagem queima
+ * a conversa e nao ha volta. Por isso a regra e determinista.
+ *
+ * So se aplica enquanto o lead esta no inicio do funil: quem ja disse que se
+ * registou nao pode ser impedido de falar do deposito por causa do turno.
+ *
+ * Exportada por ser a regra mais dificil de verificar so por observacao das
+ * respostas — e a mais cara de errar.
+ */
+export function phaseRule(turn: number, stage: SalesDirective['stage']): string {
+  const early = stage === 'novo' || stage === 'qualificacao';
+
+  if (early && turn <= 2) {
+    return (
+      'FASE — RAPPORT: esta mensagem e so conversa. PROIBIDO mencionar registo, ' +
+      `deposito, link, valores, bonus ou ${env.PLATFORM_NAME}. Se o lead perguntar ` +
+      'quanto custa, diz que ja la vais e faz-lhe uma pergunta sobre ele. ' +
+      'Descobre o nome, o cantao onde vive ou ha quanto tempo esta na Suica.'
+    );
+  }
+
+  if (early && turn === 3) {
+    return (
+      'FASE — COMUNIDADE E RESULTADOS: apresenta o grupo e o que ele ja fez. ' +
+      'AINDA NAO fales de condicao de entrada, deposito ou link.'
+    );
+  }
+
+  return '';
+}
+
+function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number): string {
   const linkRule =
     directive.includeLink && env.AFFILIATE_LINK
       ? `Inclui o link de registo exatamente assim: ${env.AFFILIATE_LINK}`
@@ -116,8 +154,10 @@ function buildDirectiveBlock(directive: SalesDirective, lead: Lead): string {
     ? 'ENCERRAMENTO: agradece, respeita a decisao do lead, diz que ele pode voltar a falar quando quiser e NAO faças nenhuma oferta nem pergunta de vendas.'
     : `PROXIMO PASSO: ${directive.cta}`;
 
+  const phase = phaseRule(turn, directive.stage);
+
   return `[DIRETRIZ INTERNA — NAO MOSTRES AO LEAD]
-Nome do lead: ${lead.firstName ?? 'desconhecido'}
+${phase ? `${phase}\n` : ''}Nome do lead: ${lead.firstName ?? 'desconhecido'}
 Estagio do funil: ${directive.stage}
 Perfil do lead: ${directive.profile} — ${PROFILE_GUIDANCE[directive.profile]}
 Intencao detetada: ${directive.intent}
@@ -179,6 +219,10 @@ export async function writeReply(params: {
 }): Promise<string> {
   const { lead, history, incoming, directive } = params;
 
+  // Mesma contagem que o estrategista usa, para os dois concordarem sobre em
+  // que ponto da sequencia a conversa esta.
+  const turn = history.filter((message) => message.role === 'user').length + 1;
+
   const contents = toGeminiContents([
     ...history,
     {
@@ -209,7 +253,7 @@ export async function writeReply(params: {
           // A persona e fixa; a diretriz muda a cada turno. As duas juntas na
           // instrucao de sistema mantem o historico livre de texto interno, que
           // o lead nunca deve ver ecoado de volta.
-          systemInstruction: `${PERSONA}\n\n${buildDirectiveBlock(directive, lead)}`,
+          systemInstruction: `${PERSONA}\n\n${buildDirectiveBlock(directive, lead, turn)}`,
           // O redator nao decide nada: a estrategia ja veio pronta. Pensar aqui
           // so adiciona latencia a uma mensagem de 1-3 frases.
           thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },

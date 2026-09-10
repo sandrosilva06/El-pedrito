@@ -115,6 +115,22 @@ vezes chegaria ao link sem nunca ter falado.
 | --- | --- |
 | "Tenho de pagar alguma coisa?" | Nada a mim, grupo gratuito, sem mensalidades. O depósito é saldo dele. Fecha a perguntar se ficou esclarecido. **Sem link.** |
 | "Já tenho conta noutra casa" | Motivo técnico: as entradas são dadas e conferidas nesta. Nunca difamar as outras casas. |
+| "Vou pensar" / "faço depois do trabalho" | Não é um não: é alguém com vida. Aceitar com calma, ancorar o valor do dia sem inventar números, e pedir uma hora — como favor, nunca como cobrança. Sem link. |
+
+### Promessa de depósito
+
+Quando o lead dá uma hora ("saio às 18h30"), o estrategista extrai-a para
+`promisedTime` e o bot guarda o instante em UTC. O agendador corre uma
+passagem a cada minuto — não nos slots, porque a hora foi combinada com cada
+lead — e envia um lembrete no tom do El Pedrito.
+
+Este lembrete **ignora as horas de silêncio**: o lead pediu-o. O silêncio
+existe para não incomodar quem não pediu nada.
+
+Quem tem promessa pendente fica **fora do remarketing em massa** — dois
+lembretes no mesmo dia é o que faz uma pessoa bloquear o bot. A promessa é
+limpa antes do envio (uma falha não deixa o lead a receber o mesmo lembrete
+todos os minutos) e também quando ele manda o comprovativo.
 
 O estrategista recebe o número do turno e a sequência no prompt. Mas a
 interdição das fases iniciais é **determinística**, calculada em

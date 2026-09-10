@@ -45,6 +45,11 @@ export interface SalesDirective {
   tone: string;
   /** Perfil psicologico do lead; decide como o redator o aborda. */
   profile: LeadProfile;
+  /**
+   * Hora "HH:MM" que o lead deu para tratar do deposito, ou "" se nao deu
+   * nenhuma. E o que agenda o lembrete individual.
+   */
+  promisedTime: string;
   /** Se true, o link de afiliado deve aparecer na resposta. */
   includeLink: boolean;
   /** Fatos que valem guardar sobre o lead (memoria de longo prazo). */
@@ -72,6 +77,10 @@ const responseSchema: Schema = {
       enum: [...LEAD_PROFILES],
       description: 'Perfil psicologico do lead',
     },
+    promisedTime: {
+      type: Type.STRING,
+      description: 'Hora HH:MM que o lead deu para tratar do deposito, ou vazio',
+    },
     includeLink: { type: Type.BOOLEAN, description: 'Incluir o link de afiliado?' },
     notes: { type: Type.STRING, description: 'Fatos a memorizar sobre o lead' },
     shouldStop: { type: Type.BOOLEAN, description: 'O lead pediu para parar?' },
@@ -85,6 +94,7 @@ const responseSchema: Schema = {
     'cta',
     'tone',
     'profile',
+    'promisedTime',
     'includeLink',
     'notes',
     'shouldStop',
@@ -175,6 +185,23 @@ LEAD QUE VOLTA:
 - O estagio nao regride por causa disto. Mantem o que ja estava.
 
 OBJECOES COM RESPOSTA FIXA — usa estes angulos, nao improvises outros:
+
+"Vou pensar" / "faco mais logo" / "depois do trabalho" / "ao fim de semana"
+- Isto NAO e um nao. E o adiamento de quem trabalha e tem vida — a pior coisa
+  a fazer aqui e insistir. Insistir transforma um "logo" num "nunca".
+- Aceita com calma total e sem uma unica farpa: o trabalho e a familia vem
+  primeiro, e isso diz-se a serio.
+- Ancora o valor do dia SEM inventar: lembra que ha entradas preparadas para
+  hoje e que o ideal e estar dentro antes de os jogos comecarem. Nunca digas
+  quantas nem que odd tem se isso nao estiver no teu contexto.
+- Tenta fixar uma hora, enquadrada como um favor a ti: "a que horas sais do
+  trabalho, para eu te apitar se me esquecer?". Nunca como cobranca.
+- includeLink=false. Quem esta a adiar nao quer um link, quer espaco.
+- Se ele der uma hora ("as 18", "depois das 19h30", "logo a noite"), poe-a em
+  promisedTime no formato HH:MM. "logo a noite" -> "20:00"; "depois do
+  trabalho" sem hora -> "18:30"; ao fim de semana ou sem sinal nenhum -> "".
+- promisedTime fica vazio em todos os outros casos. Nao inventes horas para
+  quem nao adiou nada.
 
 "Tenho de pagar alguma coisa?" / objecao de preco
 - includeLink=false. O link NAO sai a responder a esta pergunta.
@@ -299,6 +326,7 @@ function fallbackDirective(lead: Lead): SalesDirective {
     cta: 'Fazer uma pergunta de qualificacao.',
     tone: 'informal, calmo, sem pressao',
     profile: 'indefinido',
+    promisedTime: '',
     includeLink: false,
     notes: '',
     shouldStop: false,
@@ -408,6 +436,11 @@ async function requestDirective(params: {
       profile: LEAD_PROFILES.includes(parsed.profile as LeadProfile)
         ? (parsed.profile as LeadProfile)
         : 'indefinido',
+      // So aceita HH:MM valido: o modelo devolve "logo" ou "18h" com alguma
+      // frequencia, e uma hora invalida agendaria um lembrete para o vazio.
+      promisedTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(parsed.promisedTime ?? ''))
+        ? String(parsed.promisedTime)
+        : '',
       includeLink: parsed.includeLink === true,
       notes: text(parsed.notes, ''),
       shouldStop: parsed.shouldStop === true,

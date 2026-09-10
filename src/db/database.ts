@@ -46,6 +46,10 @@ export type MessageRole = 'user' | 'assistant';
 
 export interface Lead {
   chatId: number;
+  /** Quando o lead disse que ia tratar disto (UTC), ou null. */
+  promisedAt: string | null;
+  /** O que ele disse, para o lembrete nao soar generico. */
+  promiseNote: string | null;
   firstName: string | null;
   username: string | null;
   languageCode: string | null;
@@ -96,7 +100,7 @@ export interface DepositProof {
 }
 
 /** Publicos do remarketing: quem ainda nao depositou, e quem ja esta no VIP. */
-export type RemarketingAudience = 'nao_convertido' | 'vip';
+export type RemarketingAudience = 'nao_convertido' | 'vip' | 'promessa';
 
 export interface FunnelStats {
   totalLeads: number;
@@ -104,10 +108,14 @@ export interface FunnelStats {
   byStage: Record<string, number>;
   /** Comprovativos a espera de alguem os validar. */
   pendingProofs: number;
+  /** Leads que prometeram depositar e ainda nao foram lembrados. */
+  pendingPromises: number;
 }
 
 interface LeadRow {
   chat_id: number;
+  promised_at: string | null;
+  promise_note: string | null;
   first_name: string | null;
   username: string | null;
   language_code: string | null;
@@ -199,6 +207,9 @@ function addColumnIfMissing(table: string, column: string, definition: string): 
 addColumnIfMissing('leads', 'last_remarketing_at', 'TEXT');
 addColumnIfMissing('leads', 'remarketing_touches', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('leads', 'blocked', 'INTEGER NOT NULL DEFAULT 0');
+// Estado "promessa de deposito": instante UTC combinado com o lead.
+addColumnIfMissing('leads', 'promised_at', 'TEXT');
+addColumnIfMissing('leads', 'promise_note', 'TEXT');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS remarketing_runs (
@@ -253,6 +264,8 @@ function toStage(value: string): FunnelStage {
 function mapLead(row: LeadRow): Lead {
   return {
     chatId: row.chat_id,
+    promisedAt: row.promised_at,
+    promiseNote: row.promise_note,
     firstName: row.first_name,
     username: row.username,
     languageCode: row.language_code,
@@ -332,11 +345,33 @@ const statements = {
      WHERE chat_id = ?
   `),
   markBlocked: db.prepare("UPDATE leads SET blocked = 1 WHERE chat_id = ?"),
+  setPromise: db.prepare(`
+    UPDATE leads SET promised_at = ?, promise_note = ?, updated_at = datetime('now')
+     WHERE chat_id = ?
+  `),
+  clearPromise: db.prepare(
+    'UPDATE leads SET promised_at = NULL, promise_note = NULL WHERE chat_id = ?',
+  ),
+  duePromises: db.prepare(`
+    SELECT * FROM leads
+     WHERE blocked = 0
+       AND promised_at IS NOT NULL
+       AND promised_at <= ?
+       AND stage NOT IN ('perdido', ${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
+     ORDER BY promised_at ASC
+     LIMIT ?
+  `),
+  countPromises: db.prepare(
+    'SELECT COUNT(*) AS total FROM leads WHERE promised_at IS NOT NULL',
+  ),
   targetsNotConverted: db.prepare(`
     SELECT * FROM leads
      WHERE blocked = 0
        AND stage NOT IN ('perdido', ${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
        AND remarketing_touches < ?
+       -- Quem prometeu ja tem lembrete proprio marcado; dois no mesmo dia
+       -- e que fazem a pessoa bloquear o bot.
+       AND promised_at IS NULL
        AND updated_at <= datetime('now', ?)
        AND (last_remarketing_at IS NULL OR last_remarketing_at <= datetime('now', ?))
      ORDER BY updated_at ASC
@@ -594,11 +629,32 @@ export function markBlocked(chatId: number): void {
   statements.markBlocked.run(chatId);
 }
 
+/**
+ * Regista que o lead se comprometeu a tratar disto a uma certa hora. Uma
+ * promessa nova substitui a anterior: vale a ultima coisa que ele disse.
+ */
+export function setDepositPromise(chatId: number, whenUtc: string, note: string | null): void {
+  statements.setPromise.run(whenUtc, note, chatId);
+}
+
+export function clearDepositPromise(chatId: number): void {
+  statements.clearPromise.run(chatId);
+}
+
+/**
+ * Promessas vencidas. Quem ja depositou ou saiu do funil nao aparece — o
+ * lembrete e para quem disse que ia tratar disto e ainda nao tratou.
+ */
+export function getDuePromises(nowUtc: string, limit: number): Lead[] {
+  return asRows<LeadRow>(statements.duePromises.all(nowUtc, limit)).map(mapLead);
+}
+
 export function getStats(): FunnelStats {
   const leads = asRow<{ total: number }>(statements.countLeads.get());
   const messages = asRow<{ total: number }>(statements.countMessages.get());
   const stages = asRows<{ stage: string; total: number }>(statements.countByStage.all());
   const proofs = asRow<{ total: number }>(statements.countPendingProofs.get());
+  const promises = asRow<{ total: number }>(statements.countPromises.get());
 
   const byStage: Record<string, number> = {};
   for (const row of stages) {
@@ -610,6 +666,7 @@ export function getStats(): FunnelStats {
     totalMessages: messages?.total ?? 0,
     byStage,
     pendingProofs: proofs?.total ?? 0,
+    pendingPromises: promises?.total ?? 0,
   };
 }
 

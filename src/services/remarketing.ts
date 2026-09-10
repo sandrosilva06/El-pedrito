@@ -32,6 +32,11 @@ const FALLBACK_SCRIPTS: Record<RemarketingAudience, string[]> = {
     '{nome}, mandei as entradas do dia no grupo. Da la um salto antes que os jogos comecem.',
     'Tudo bem {nome}? Passa pelo VIP para veres o que ja saiu hoje — nao quero que percas nenhuma.',
   ],
+  promessa: [
+    'Boas malandro, ja saiste do trabalho? As apostas da noite saem daqui a bocado no VIP, estas pronto para abrires a conta e entrares?',
+    '{nome}, conforme combinado aqui estou eu. Ja tens um bocadinho para tratar disso?',
+    'Boas {nome}, ficou combinado que te apitava a esta hora. Ainda vais a tempo das entradas de hoje.',
+  ],
 };
 
 const BRIEFS: Record<RemarketingAudience, string> = {
@@ -43,6 +48,11 @@ conversa.`,
   vip: `Estes leads ja estao no grupo VIP. A mensagem deve puxa-los de volta ao
 grupo para verem as entradas do dia. Tom de companheirismo, nada de vendas —
 estas pessoas ja compraram.`,
+  promessa: `Este lead disse que tratava do assunto a esta hora e tu ficaste de
+lhe apitar. A mensagem e o cumprimento desse combinado, nao uma cobranca:
+lembra que ficou combinado, pergunta se ele ja tem um bocadinho, e refere que
+as entradas de hoje ainda vao a tempo. Nada de pressao e nada de queixume por
+ele nao ter feito ainda.`,
 };
 
 function buildPrompt(audience: RemarketingAudience): string {

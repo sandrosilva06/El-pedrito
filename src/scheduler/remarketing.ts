@@ -1,6 +1,8 @@
 import { env } from '../config/env';
 import {
   claimRemarketingSlot,
+  clearDepositPromise,
+  getDuePromises,
   getRemarketingTargets,
   markBlocked,
   markRemarketed,
@@ -10,6 +12,7 @@ import {
 } from '../db/database';
 import { generateRemarketingMessage, personalise } from '../services/remarketing';
 import { createLogger } from '../utils/logger';
+import { nowInTimezone } from '../utils/timezone';
 import { bot } from '../telegram/bot';
 
 const log = createLogger('agendador');
@@ -23,27 +26,6 @@ const BATCH_LIMIT = 200;
 const SEND_INTERVAL_MS = 120;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Hora e data no fuso dos leads, nao no do servidor. O Render corre em UTC e
- * a Suica muda para horario de verao — um slot fixo em UTC chegaria uma hora
- * ao lado durante metade do ano.
- */
-function nowInLeadTimezone(): { time: string; date: string } {
-  const formatter = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: env.REMARKETING_TIMEZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-
-  // O locale sueco formata como "2026-09-10 14:30", que ja e ISO-like.
-  const [date, time] = formatter.format(new Date()).split(' ');
-  return { date: date ?? '', time: time ?? '' };
-}
 
 function parseSlots(): string[] {
   return env.REMARKETING_SLOTS.split(',')
@@ -125,11 +107,48 @@ async function sendOne(lead: Lead, template: string): Promise<boolean> {
   }
 }
 
+/**
+ * Lembretes individuais de promessa de deposito. Corre a cada minuto, nao nos
+ * slots: a hora foi combinada com cada lead e um slot fixo chegaria horas ao
+ * lado do que ficou prometido.
+ *
+ * Ao contrario do remarketing em massa, este lembrete ignora as horas de
+ * silencio — o lead pediu-o ("apitas-me aqui"), e o silencio existe para nao
+ * incomodar quem nao pediu nada.
+ */
+async function sendDuePromises(): Promise<void> {
+  const due = getDuePromises(new Date().toISOString(), 100);
+  if (due.length === 0) return;
+
+  const { template, generated } = await generateRemarketingMessage('promessa');
+  log.info(`${due.length} promessa(s) vencida(s), mensagem ${generated ? 'gerada' : 'de reserva'}`);
+
+  for (const lead of due) {
+    // Limpa antes de enviar: se o envio falhar, o lead nao fica a receber o
+    // mesmo lembrete a cada minuto ate ao fim dos tempos.
+    clearDepositPromise(lead.chatId);
+
+    const delivered = await sendOne(lead, template);
+    log.info(
+      `lembrete de promessa chat=${lead.chatId} (${lead.promiseNote ?? '?'}) ` +
+        `${delivered ? 'entregue' : 'falhou'}`,
+    );
+
+    await sleep(SEND_INTERVAL_MS);
+  }
+}
+
 async function tick(): Promise<void> {
+  try {
+    await sendDuePromises();
+  } catch (error) {
+    log.error('falha ao enviar lembretes de promessa', error);
+  }
+
   const slots = parseSlots();
   if (slots.length === 0) return;
 
-  const { time, date } = nowInLeadTimezone();
+  const { time, date } = nowInTimezone(env.REMARKETING_TIMEZONE);
   const slot = dueSlot(time, slots);
   if (!slot) return;
 
@@ -159,7 +178,8 @@ export function startRemarketingScheduler(): void {
 
   log.info(
     `remarketing activo — slots ${slots.join(', ')} (${env.REMARKETING_TIMEZONE}), ` +
-      `tecto de ${env.REMARKETING_MAX_TOUCHES} lembretes por lead`,
+      `tecto de ${env.REMARKETING_MAX_TOUCHES} lembretes por lead, ` +
+      'lembretes de promessa a cada minuto',
   );
 
   void tick();

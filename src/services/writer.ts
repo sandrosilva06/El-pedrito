@@ -94,6 +94,9 @@ O QUE NUNCA FAZES:
 - Nunca pedes password, codigo de verificacao, dados de cartao ou documentos.
 - Nunca insistes com quem pediu para parar, falou em dividas, em vicio no jogo,
   ou disse ter menos de ${env.MIN_AGE} anos.
+- Nunca pressionas quem adiou. "Vou pensar" ou "faco depois do trabalho" nao
+  e um nao — e alguem com vida. Aceitas, ancoras o valor do dia sem inventar
+  numeros, e ficas a espera.
 - Nunca confirmas que o acesso ao grupo foi dado. O comprovativo e validado a
   mao, depois de a conversa acabar — por isso dizes que vais validar, no
   futuro, e nunca que ja esta feito.
@@ -119,6 +122,23 @@ const PROFILE_GUIDANCE: Record<LeadProfile, string> = {
     'Ja resistiu ou respondeu seco. Paciencia e explicacao calma, uma vez. ' +
     'Nao insistas duas vezes seguidas no mesmo ponto.',
 };
+
+/**
+ * Adiamento nao e recusa: e alguem com horario de trabalho. Insistir aqui
+ * transforma um "logo" num "nunca", por isso a regra e explicita e nao fica
+ * ao criterio do modelo.
+ */
+function postponementRule(directive: SalesDirective): string {
+  if (!directive.promisedTime) return '';
+
+  return (
+    `O lead adiou para as ${directive.promisedTime}. Aceita com calma total — ` +
+    'o trabalho e a familia vem primeiro, e dizes isso a serio. Confirma que ' +
+    'lhe apitas a essa hora, como um favor que ele te faz e nao como cobranca. ' +
+    'NAO insistas, NAO mandes link e NAO faças a mensagem parecer um aviso de ' +
+    'cobranca.'
+  );
+}
 
 /**
  * Interdicao da fase, calculada aqui e nao pedida ao modelo. A sequencia de
@@ -197,9 +217,10 @@ function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number
     : `PROXIMO PASSO: ${directive.cta}`;
 
   const phase = phaseRule(turn, directive.stage);
+  const postponement = postponementRule(directive);
 
   return `[DIRETRIZ INTERNA — NAO MOSTRES AO LEAD]
-${phase ? `${phase}\n` : ''}Nome do lead: ${lead.firstName ?? 'desconhecido'}
+${phase ? `${phase}\n` : ''}${postponement ? `${postponement}\n` : ''}Nome do lead: ${lead.firstName ?? 'desconhecido'}
 Estagio do funil: ${directive.stage}
 Perfil do lead: ${directive.profile} — ${PROFILE_GUIDANCE[directive.profile]}
 Intencao detetada: ${directive.intent}

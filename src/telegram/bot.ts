@@ -7,15 +7,18 @@ import {
   clearHistory,
   forgetLead,
   getRecentMessages,
+  clearDepositPromise,
   getStats,
   recordDepositProof,
+  setDepositPromise,
   setNotes,
   upsertLead,
   type Lead,
 } from '../db/database';
-import { planStrategy } from '../services/strategist';
+import { planStrategy, type SalesDirective } from '../services/strategist';
 import { writeReply } from '../services/writer';
 import { createLogger } from '../utils/logger';
+import { nextOccurrenceUtc } from '../utils/timezone';
 
 const log = createLogger('telegram');
 
@@ -214,6 +217,20 @@ bot.command('stats', async (ctx) => {
 // ---------------------------------------------------------------------------
 
 /**
+ * Guarda a hora combinada com o lead, convertida do fuso dele para UTC. Uma
+ * hora ja passada e do dia seguinte: quem diz "as 18h" as 19h esta a falar de
+ * amanha, nao de ha uma hora.
+ */
+function recordPromise(chatId: number, directive: SalesDirective): void {
+  if (!directive.promisedTime) return;
+  if (directive.shouldStop) return;
+
+  const when = nextOccurrenceUtc(directive.promisedTime, env.REMARKETING_TIMEZONE);
+  setDepositPromise(chatId, when, directive.promisedTime);
+  log.info(`promessa registada chat=${chatId} para ${directive.promisedTime} (UTC ${when})`);
+}
+
+/**
  * Marcador de retorno. Nao e texto do lead: e o registo de que ele reapareceu
  * sem dizer nada. Vai para as IAs como contexto, mas nao e gravado no
  * historico — contar /start como turno faria a sequencia de abordagem saltar
@@ -257,6 +274,7 @@ async function runFunnelTurn(
       });
 
       advanceStage(chatId, directive.shouldStop ? 'perdido' : directive.stage);
+      recordPromise(chatId, directive);
 
       if (directive.notes.trim().length > 0) {
         const merged = [current.notes, directive.notes.trim()]
@@ -333,6 +351,8 @@ bot.on([':photo', ':document'], async (ctx) => {
   });
 
   advanceStage(lead.chatId, 'comprovativo_recebido');
+  // Cumpriu: nao faz sentido continuar a lembra-lo de depositar.
+  clearDepositPromise(lead.chatId);
 
   // Fica no historico para o estrategista nao voltar a pedir o comprovativo.
   addMessage({

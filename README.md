@@ -136,25 +136,59 @@ das duas IAs.
 
 ## Polling x Webhook
 
-`TELEGRAM_MODE=polling` (padrão) é o modo de desenvolvimento: não exige URL
-pública e o `deleteWebhook` é chamado no boot.
+**O modo é decidido sozinho.** Havendo URL pública — `TELEGRAM_WEBHOOK_URL`, ou
+`RENDER_EXTERNAL_URL` que o Render injeta — o boot usa webhook e o registra no
+Telegram. Sem ela, usa long polling. `TELEGRAM_MODE` só existe para forçar um
+dos dois.
 
-`TELEGRAM_MODE=webhook` é o modo de produção e exige:
+O motivo do automático: um serviço web alcançável pela internet deve receber
+webhook. Em polling numa plataforma que hiberna por inatividade, o serviço
+dorme, ninguém faz polling, e nada volta a acordá-lo — o bot fica mudo até o
+próximo deploy, sem erro em lugar nenhum.
 
-- `TELEGRAM_WEBHOOK_URL` — URL HTTPS pública, sem barra final;
-- `TELEGRAM_WEBHOOK_SECRET` — 16+ caracteres (`openssl rand -hex 32`).
+`TELEGRAM_WEBHOOK_SECRET` é opcional: sem ele, um valor estável é derivado do
+token do bot. Exigir a variável faria o boot falhar em quem só configurou a
+URL, e um deploy que não sobe ajuda menos que um segredo derivado.
 
-A rota não é `/webhook`: ela é derivada do token (`/telegram/<cauda-do-token>`)
-e só aceita requisições com o header `X-Telegram-Bot-Api-Secret-Token` correto —
-qualquer outra recebe `401`. O webhook é registrado automaticamente no boot.
+A rota registrada no Telegram é derivada do token
+(`/telegram/<cauda-do-token>`), mas `/webhook` também é aceito — é o caminho
+que se digita ao apontar o webhook à mão, e um POST no caminho errado daria
+404 sem nenhuma pista. Ambos exigem o header
+`X-Telegram-Bot-Api-Secret-Token`; sem ele, `401`.
+
+### Quando o bot não responde
+
+`GET /health` mostra o que o Telegram acha do webhook, sem precisar dos logs:
+
+```json
+{
+  "status": "ok",
+  "telegram": {
+    "mode": "webhook",
+    "botUsername": "seu_bot",
+    "webhookRegistered": true,
+    "pendingUpdates": 0,
+    "lastError": null,
+    "error": null
+  }
+}
+```
+
+`webhookRegistered: false` significa que o Telegram tem outra URL registrada.
+`lastError` traz a última falha de entrega (certificado, 5xx, timeout).
+`pendingUpdates` alto indica updates represados sem serem entregues.
+`error` preenchido (com `status: "degraded"`) significa que a conexão com o
+Telegram falhou no boot — o servidor sobe mesmo assim, para o `/health` poder
+contar o motivo.
 
 ### Rotas HTTP
 
 | Rota | Descrição |
 | --- | --- |
-| `GET /health` | Liveness probe: status, modo e uptime. |
-| `GET /stats` | Métricas do funil. Exige o header `x-admin-token` com o valor de `TELEGRAM_WEBHOOK_SECRET`; sem ele responde `404`. |
-| `POST /telegram/<cauda-do-token>` | Webhook do Telegram (só em modo webhook). |
+| `GET /health` | Estado do registro no Telegram, uptime e o último erro de entrega. |
+| `GET /stats` | Métricas do funil. Exige `x-admin-token` com o `TELEGRAM_WEBHOOK_SECRET` **configurado à mão**; com segredo derivado o endpoint fica desligado (`404`). |
+| `POST /telegram/<cauda-do-token>` | Webhook do Telegram. |
+| `POST /webhook` | Mesmo handler, para webhook apontado à mão. |
 
 ---
 
@@ -199,9 +233,15 @@ Build command:  npm ci && npm run build
 Start command:  npm start
 ```
 
-Configure as variáveis do `.env.example` no painel da plataforma e use
-`TELEGRAM_MODE=webhook` com `TELEGRAM_WEBHOOK_URL` apontando para a URL
-pública do serviço.
+Configure as variáveis do `.env.example` no painel da plataforma. No Render
+não é preciso definir `TELEGRAM_MODE` nem `TELEGRAM_WEBHOOK_URL`: a URL
+pública vem de `RENDER_EXTERNAL_URL` e o modo webhook é escolhido a partir
+dela.
+
+A porta HTTP sobe antes de qualquer chamada ao Telegram. As plataformas
+derrubam o serviço que não liga a porta dentro de um prazo, e falar com o
+Telegram primeiro significava que um token errado ou uma latência alta viravam
+deploy falho em vez de erro diagnosticável.
 
 **Atenção ao disco.** O `node:sqlite` grava num arquivo, e a maioria das
 plataformas (Render incluído) tem sistema de arquivos efêmero: sem um disco

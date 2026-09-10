@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import dotenv from 'dotenv';
@@ -44,9 +45,12 @@ const schema = z
     PORT: intFromString(3000, 1, 65535),
 
     TELEGRAM_BOT_TOKEN: requiredString('TELEGRAM_BOT_TOKEN'),
-    TELEGRAM_MODE: z.enum(['polling', 'webhook']).default('polling'),
+    TELEGRAM_MODE: z.enum(['polling', 'webhook']).optional(),
     TELEGRAM_WEBHOOK_URL: optionalString,
     TELEGRAM_WEBHOOK_SECRET: optionalString,
+    // O Render injeta a URL publica do servico automaticamente. Serve de
+    // fallback para quem esquece de configurar TELEGRAM_WEBHOOK_URL.
+    RENDER_EXTERNAL_URL: optionalString,
 
     GEMINI_API_KEY: requiredString('GEMINI_API_KEY'),
     GEMINI_MODEL: optionalString.transform((value) => value ?? 'gemini-3.6-flash'),
@@ -74,41 +78,44 @@ const schema = z
     RATE_LIMIT_WINDOW_SECONDS: intFromString(60, 1, 3600),
 
     ADMIN_CHAT_IDS: csvNumbers,
-  })
-  .superRefine((value, ctx) => {
-    if (value.TELEGRAM_MODE !== 'webhook') return;
-
-    if (!value.TELEGRAM_WEBHOOK_URL) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['TELEGRAM_WEBHOOK_URL'],
-        message: 'e obrigatorio quando TELEGRAM_MODE=webhook',
-      });
-    } else if (!/^https:\/\/.+/.test(value.TELEGRAM_WEBHOOK_URL)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['TELEGRAM_WEBHOOK_URL'],
-        message: 'deve ser uma URL https:// publica',
-      });
-    }
-
-    // O Telegram so aceita o header de segredo; sem ele qualquer um que
-    // descubra a URL consegue injetar updates falsos no funil.
-    if (!value.TELEGRAM_WEBHOOK_SECRET || value.TELEGRAM_WEBHOOK_SECRET.length < 16) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['TELEGRAM_WEBHOOK_SECRET'],
-        message: 'e obrigatorio em modo webhook e precisa ter ao menos 16 caracteres',
-      });
-    }
   });
 
-export type Env = z.infer<typeof schema> & {
+export type Env = Omit<
+  z.infer<typeof schema>,
+  'TELEGRAM_MODE' | 'TELEGRAM_WEBHOOK_URL' | 'TELEGRAM_WEBHOOK_SECRET'
+> & {
+  /** Modo resolvido: webhook sempre que existir uma URL publica. */
+  TELEGRAM_MODE: 'polling' | 'webhook';
+  /** URL publica ja normalizada (sem barra final), ou null se nao houver. */
+  TELEGRAM_WEBHOOK_URL: string | null;
+  /** Segredo do header do Telegram; derivado do token quando nao configurado. */
+  TELEGRAM_WEBHOOK_SECRET: string;
+  /** Token do GET /stats: so existe se o segredo foi configurado a mao. */
+  adminToken: string | null;
   /** Caminho absoluto do SQLite (ou ":memory:"). */
   databaseFile: string;
-  /** Rota registrada no Express e no Telegram, derivada do token. */
+  /** Rota principal do webhook, derivada do token. */
   webhookPath: string;
+  /** Alias fixo aceito junto da rota principal. */
+  webhookAliasPath: string;
 };
+
+/**
+ * O Telegram so autentica o webhook pelo header de segredo. Exigir a variavel
+ * faria o boot falhar em quem so configurou a URL — e um deploy que nao sobe
+ * ajuda menos que um segredo derivado. O hash do token e estavel entre
+ * restarts e imprevisivel para quem nao tem o token.
+ */
+function deriveWebhookSecret(token: string): string {
+  return createHash('sha256').update(`telegram-webhook:${token}`).digest('hex');
+}
+
+function normalizePublicUrl(value: string | undefined): string | null {
+  if (!value) return null;
+
+  const trimmed = value.trim().replace(/\/+$/, '');
+  return trimmed.length > 0 ? trimmed : null;
+}
 
 function formatIssues(error: z.ZodError): string {
   return error.issues
@@ -136,10 +143,45 @@ function load(): Env {
   // Telegram, em vez de expor um /webhook publico.
   const tokenTail = value.TELEGRAM_BOT_TOKEN.split(':').pop() ?? value.TELEGRAM_BOT_TOKEN;
 
+  // A URL publica vem da configuracao explicita ou, no Render, do proprio
+  // ambiente. Ter uma URL e o que decide o modo: um servico web alcancavel
+  // pela internet deve receber webhook, nao ficar fazendo long polling —
+  // em plataformas que hibernam por inatividade o polling morre no primeiro
+  // spin-down e nunca mais acorda, porque nada volta a bater na porta.
+  const publicUrl =
+    normalizePublicUrl(value.TELEGRAM_WEBHOOK_URL) ??
+    normalizePublicUrl(value.RENDER_EXTERNAL_URL);
+
+  const mode = value.TELEGRAM_MODE ?? (publicUrl ? 'webhook' : 'polling');
+
+  if (mode === 'webhook' && !publicUrl) {
+    throw new Error(
+      'TELEGRAM_MODE=webhook exige TELEGRAM_WEBHOOK_URL (a URL publica https:// do servico).',
+    );
+  }
+
+  if (publicUrl && !/^https:\/\/.+/.test(publicUrl)) {
+    throw new Error(
+      `URL publica invalida: "${publicUrl}". O Telegram so aceita webhook em https://.`,
+    );
+  }
+
+  const configuredSecret = value.TELEGRAM_WEBHOOK_SECRET;
+
+  if (configuredSecret && configuredSecret.length < 16) {
+    throw new Error('TELEGRAM_WEBHOOK_SECRET precisa ter ao menos 16 caracteres.');
+  }
+
   return {
     ...value,
+    TELEGRAM_MODE: mode,
+    TELEGRAM_WEBHOOK_URL: publicUrl,
+    TELEGRAM_WEBHOOK_SECRET:
+      configuredSecret ?? deriveWebhookSecret(value.TELEGRAM_BOT_TOKEN),
+    adminToken: configuredSecret ?? null,
     databaseFile,
     webhookPath: `/telegram/${tokenTail}`,
+    webhookAliasPath: '/webhook',
   };
 }
 

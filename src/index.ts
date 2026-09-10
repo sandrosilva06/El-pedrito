@@ -14,10 +14,31 @@ const app = express();
 
 app.disable('x-powered-by');
 
+/**
+ * Estado do registro no Telegram, preenchido no boot. Fica no /health porque
+ * "o bot nao responde" quase sempre se resolve olhando o que o Telegram acha
+ * do webhook — e sem isso a unica pista fica presa nos logs da plataforma.
+ */
+const telegram: {
+  mode: string;
+  botUsername: string | null;
+  webhookRegistered: boolean;
+  pendingUpdates: number | null;
+  lastError: string | null;
+  error: string | null;
+} = {
+  mode: env.TELEGRAM_MODE,
+  botUsername: null,
+  webhookRegistered: false,
+  pendingUpdates: null,
+  lastError: null,
+  error: null,
+};
+
 app.get('/health', (_req, res) => {
   res.json({
-    status: 'ok',
-    mode: env.TELEGRAM_MODE,
+    status: telegram.error ? 'degraded' : 'ok',
+    telegram,
     uptimeSeconds: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
   });
@@ -26,9 +47,11 @@ app.get('/health', (_req, res) => {
 app.get('/stats', (req, res) => {
   // Endpoint interno: so responde com o segredo do webhook, para nao expor
   // metricas do funil publicamente.
+  // Usa o segredo apenas quando ele foi configurado explicitamente: o valor
+  // derivado do token nao e conhecido por ninguem, entao nao serve de senha.
   const provided = req.get('x-admin-token');
 
-  if (!env.TELEGRAM_WEBHOOK_SECRET || provided !== env.TELEGRAM_WEBHOOK_SECRET) {
+  if (!env.adminToken || provided !== env.adminToken) {
     res.status(404).json({ error: 'not found' });
     return;
   }
@@ -36,18 +59,20 @@ app.get('/stats', (req, res) => {
   res.json(getStats());
 });
 
-if (env.TELEGRAM_MODE === 'webhook') {
-  // O parser de JSON fica restrito a rota do webhook: o payload do Telegram e
-  // pequeno e nenhuma outra rota recebe corpo.
-  app.post(
-    env.webhookPath,
-    express.json({ limit: '1mb' }),
-    webhookCallback(bot, 'express', {
-      secretToken: env.TELEGRAM_WEBHOOK_SECRET,
-      timeoutMilliseconds: 60_000,
-    }),
-  );
-}
+// A rota fica registrada nos dois caminhos e independe do modo: o caminho
+// derivado do token (o que a aplicacao registra no Telegram) e o /webhook
+// literal, que e o que se digita quando o webhook e apontado a mao. Um POST
+// no caminho errado responderia 404 sem nenhuma pista do porque. O header de
+// segredo protege os dois. O parser de JSON fica restrito a essas rotas: o
+// payload do Telegram e pequeno e nenhuma outra rota recebe corpo.
+app.post(
+  [env.webhookPath, env.webhookAliasPath],
+  express.json({ limit: '1mb' }),
+  webhookCallback(bot, 'express', {
+    secretToken: env.TELEGRAM_WEBHOOK_SECRET,
+    timeoutMilliseconds: 60_000,
+  }),
+);
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'not found' });
@@ -56,34 +81,77 @@ app.use((_req, res) => {
 let server: http.Server | null = null;
 
 async function start(): Promise<void> {
-  await bot.init();
-  await bot.api.setMyCommands(BOT_COMMANDS);
-
-  log.info(`bot @${bot.botInfo.username} inicializado (${env.NODE_ENV})`);
-
+  // A porta sobe ANTES de qualquer chamada ao Telegram. As plataformas de
+  // deploy derrubam o servico que nao liga a porta dentro de um prazo, e
+  // bot.init() + setMyCommands sao duas idas a rede: token errado ou Telegram
+  // lento significavam porta nunca ligada, deploy marcado como falho e
+  // crash-loop — sem nada no /health explicando o motivo.
   server = app.listen(env.PORT, () => {
     log.info(`HTTP ouvindo na porta ${env.PORT}`);
   });
 
-  if (env.TELEGRAM_MODE === 'webhook') {
-    const url = `${env.TELEGRAM_WEBHOOK_URL}${env.webhookPath}`;
+  try {
+    await bot.init();
+    telegram.botUsername = bot.botInfo.username;
+    log.info(`bot @${bot.botInfo.username} inicializado (${env.NODE_ENV})`);
 
-    await bot.api.setWebhook(url, {
-      secret_token: env.TELEGRAM_WEBHOOK_SECRET,
-      drop_pending_updates: !isProduction,
-      allowed_updates: ['message'],
-    });
+    await bot.api.setMyCommands(BOT_COMMANDS);
 
-    log.info(`webhook registrado em ${url}`);
-  } else {
-    // Em polling o Telegram recusa updates se um webhook antigo continuar ativo.
-    await bot.api.deleteWebhook({ drop_pending_updates: true });
-
-    void bot.start({
-      allowed_updates: ['message'],
-      onStart: (info) => log.info(`long polling ativo para @${info.username}`),
-    });
+    if (env.TELEGRAM_MODE === 'webhook') {
+      await startWebhook();
+    } else {
+      await startPolling();
+    }
+  } catch (error) {
+    // O processo continua de pe: o /health passa a responder "degraded" com o
+    // motivo, o que e mais diagnosticavel do que um container reiniciando.
+    telegram.error = error instanceof Error ? error.message : String(error);
+    log.error('falha ao conectar no Telegram; servidor segue no ar', error);
   }
+}
+
+async function startWebhook(): Promise<void> {
+  const url = `${env.TELEGRAM_WEBHOOK_URL}${env.webhookPath}`;
+
+  await bot.api.setWebhook(url, {
+    secret_token: env.TELEGRAM_WEBHOOK_SECRET,
+    drop_pending_updates: !isProduction,
+    allowed_updates: ['message'],
+  });
+
+  log.info(`webhook registrado em ${url}`);
+
+  // Confirma com o proprio Telegram em vez de assumir que o setWebhook
+  // resolveu: getWebhookInfo devolve a URL que ele realmente tem, quantos
+  // updates estao represados e o ultimo erro de entrega — que e onde aparece
+  // um "Wrong response from the webhook" ou um certificado invalido.
+  const info = await bot.api.getWebhookInfo();
+
+  telegram.webhookRegistered = info.url === url;
+  telegram.pendingUpdates = info.pending_update_count;
+  telegram.lastError = info.last_error_message ?? null;
+
+  if (!telegram.webhookRegistered) {
+    log.warn(`o Telegram registrou "${info.url}" em vez de "${url}"`);
+  }
+
+  if (info.last_error_message) {
+    log.warn(`ultima falha de entrega do Telegram: ${info.last_error_message}`);
+  }
+
+  if (info.pending_update_count > 0) {
+    log.info(`${info.pending_update_count} updates represados serao entregues agora`);
+  }
+}
+
+async function startPolling(): Promise<void> {
+  // Em polling o Telegram recusa updates se um webhook antigo continuar ativo.
+  await bot.api.deleteWebhook({ drop_pending_updates: true });
+
+  void bot.start({
+    allowed_updates: ['message'],
+    onStart: (info) => log.info(`long polling ativo para @${info.username}`),
+  });
 }
 
 let shuttingDown = false;

@@ -54,11 +54,17 @@ const schema = z
     RENDER_EXTERNAL_HOSTNAME: optionalString,
 
     GEMINI_API_KEY: requiredString('GEMINI_API_KEY'),
-    GEMINI_MODEL: optionalString.transform((value) => value ?? 'gemini-3.6-flash'),
-
-    ANTHROPIC_API_KEY: requiredString('ANTHROPIC_API_KEY'),
-    ANTHROPIC_MODEL: optionalString.transform((value) => value ?? 'claude-opus-5'),
-    ANTHROPIC_MAX_TOKENS: intFromString(700, 128, 8192),
+    // Modelo do estrategista. GEMINI_MODEL e o nome antigo, mantido para nao
+    // quebrar deploys que ja o tenham configurado.
+    GEMINI_MODEL: optionalString,
+    GEMINI_STRATEGIST_MODEL: optionalString,
+    // Modelo do redator. O default e DIFERENTE do estrategista de proposito:
+    // a quota do plano gratuito e contada por modelo
+    // (GenerateRequestsPerMinutePerProjectPerModel), e a cadeia gasta duas
+    // chamadas por mensagem do lead. Com os dois papeis no mesmo modelo, o
+    // teto efetivo cai pela metade.
+    GEMINI_WRITER_MODEL: optionalString.transform((value) => value ?? 'gemini-3.5-flash'),
+    GEMINI_WRITER_MAX_TOKENS: intFromString(700, 128, 8192),
 
     DATABASE_PATH: optionalString.transform((value) => value ?? './data/funnel.sqlite'),
     HISTORY_WINDOW: intFromString(20, 2, 100),
@@ -97,6 +103,8 @@ export type Env = Omit<
   databaseFile: string;
   /** Rota principal do webhook, derivada do token. */
   webhookPath: string;
+  /** Modelo resolvido do estrategista. */
+  GEMINI_MODEL: string;
   /** Alias fixo aceito junto da rota principal. */
   webhookAliasPath: string;
   /** Se o modo veio de TELEGRAM_MODE ou foi deduzido da URL publica. */
@@ -187,6 +195,8 @@ function load(): Env {
     TELEGRAM_WEBHOOK_SECRET:
       configuredSecret ?? deriveWebhookSecret(value.TELEGRAM_BOT_TOKEN),
     adminToken: configuredSecret ?? null,
+    GEMINI_MODEL:
+      value.GEMINI_STRATEGIST_MODEL ?? value.GEMINI_MODEL ?? 'gemini-3.6-flash',
     databaseFile,
     webhookPath: `/telegram/${tokenTail}`,
     webhookAliasPath: '/webhook',

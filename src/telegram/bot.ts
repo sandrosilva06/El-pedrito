@@ -12,8 +12,8 @@ import {
   upsertLead,
   type Lead,
 } from '../db/database';
-import { planStrategy } from '../services/gemini';
-import { writeReply } from '../services/claude';
+import { planStrategy } from '../services/strategist';
+import { writeReply } from '../services/writer';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('telegram');
@@ -27,7 +27,7 @@ const adminChatIds = new Set(env.ADMIN_CHAT_IDS);
 
 /**
  * Uma fila por chat. O Telegram entrega updates em paralelo e o lead costuma
- * mandar tres mensagens seguidas; sem isso, duas cadeias Gemini->Claude rodam
+ * mandar tres mensagens seguidas; sem isso, duas cadeias estrategista->redator
  * ao mesmo tempo sobre o mesmo historico e as respostas se contradizem.
  */
 const chatQueues = new Map<number, Promise<void>>();
@@ -190,7 +190,7 @@ bot.command('stats', async (ctx) => {
 });
 
 // ---------------------------------------------------------------------------
-// Fluxo principal: mensagem de texto -> Gemini (estrategista) -> Claude (redator)
+// Fluxo principal: mensagem de texto -> estrategista -> redator
 // ---------------------------------------------------------------------------
 
 bot.on('message:text', async (ctx) => {

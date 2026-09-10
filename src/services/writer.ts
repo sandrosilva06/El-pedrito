@@ -1,19 +1,17 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI, ThinkingLevel, type Content } from '@google/genai';
 
 import { env } from '../config/env';
 import type { Lead, StoredMessage } from '../db/database';
 import { createLogger } from '../utils/logger';
-import type { SalesDirective } from './gemini';
+import { withRetry } from './retry';
+import type { SalesDirective } from './strategist';
 
-const log = createLogger('claude');
+const log = createLogger('writer');
 
-let cachedClient: Anthropic | null = null;
+let cachedClient: GoogleGenAI | null = null;
 
-function getClient(): Anthropic {
-  if (!cachedClient) {
-    cachedClient = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 2 });
-  }
-
+function getClient(): GoogleGenAI {
+  cachedClient ??= new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
   return cachedClient;
 }
 
@@ -82,37 +80,31 @@ Escreva agora a proxima mensagem para o lead. Apenas o texto da mensagem.`;
 }
 
 /**
- * O Anthropic exige que a conversa comece com `user` e nao aceita turnos
- * vazios; historicos truncados podem comecar com `assistant`. Aqui a janela e
- * normalizada: descarta o prefixo de assistente e funde turnos consecutivos.
+ * O Gemini exige que a conversa comece com `user`, alterne os papeis e nao
+ * tenha turnos vazios; historicos truncados podem comecar pelo atendente.
+ * Aqui a janela e normalizada: descarta o prefixo do assistente e funde
+ * turnos consecutivos do mesmo lado. O papel do assistente chama-se "model".
  */
-function toAnthropicMessages(history: StoredMessage[]): Anthropic.MessageParam[] {
-  const messages: Anthropic.MessageParam[] = [];
+function toGeminiContents(history: StoredMessage[]): Content[] {
+  const contents: Content[] = [];
 
   for (const stored of history) {
-    const content = stored.content.trim();
-    if (content.length === 0) continue;
-    if (messages.length === 0 && stored.role !== 'user') continue;
+    const text = stored.content.trim();
+    if (text.length === 0) continue;
+    if (contents.length === 0 && stored.role !== 'user') continue;
 
-    const last = messages[messages.length - 1];
+    const role = stored.role === 'assistant' ? 'model' : 'user';
+    const last = contents[contents.length - 1];
 
-    if (last && last.role === stored.role) {
-      last.content = `${last.content as string}\n\n${content}`;
+    if (last && last.role === role && last.parts?.[0]) {
+      last.parts[0].text = `${last.parts[0].text ?? ''}\n\n${text}`;
       continue;
     }
 
-    messages.push({ role: stored.role, content });
+    contents.push({ role, parts: [{ text }] });
   }
 
-  return messages;
-}
-
-function extractText(message: Anthropic.Message): string {
-  return message.content
-    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-    .map((block) => block.text)
-    .join('\n')
-    .trim();
+  return contents;
 }
 
 /** Resposta usada quando o redator falha, para o lead nunca ficar no vacuo. */
@@ -122,8 +114,8 @@ function fallbackReply(lead: Lead): string {
 }
 
 /**
- * Etapa 2 da cadeia: o Claude recebe a diretriz do Gemini e o historico, e
- * redige a mensagem final que vai para o lead.
+ * Etapa 2 da cadeia: o redator recebe a diretriz do estrategista e o
+ * historico, e redige a mensagem final que vai para o lead.
  */
 export async function writeReply(params: {
   lead: Lead;
@@ -133,7 +125,7 @@ export async function writeReply(params: {
 }): Promise<string> {
   const { lead, history, incoming, directive } = params;
 
-  const messages = toAnthropicMessages([
+  const contents = toGeminiContents([
     ...history,
     {
       id: 0,
@@ -145,40 +137,45 @@ export async function writeReply(params: {
     },
   ]);
 
-  if (messages.length === 0) {
-    messages.push({ role: 'user', content: incoming });
+  if (contents.length === 0) {
+    contents.push({ role: 'user', parts: [{ text: incoming }] });
   }
 
   const startedAt = Date.now();
 
-  try {
-    const response = await getClient().messages.create({
-      model: env.ANTHROPIC_MODEL,
-      max_tokens: env.ANTHROPIC_MAX_TOKENS,
-      // Sampling (temperature/top_p/top_k) foi removido nos modelos atuais e
-      // retorna 400. A variacao de tom vem do prompt e da diretriz, nao daqui.
-      // Effort baixo mantem a latencia curta: quem raciocina e o Gemini, o
-      // Claude so redige 1-3 frases.
-      output_config: { effort: 'low' },
-      system: [
-        { type: 'text', text: PERSONA },
-        { type: 'text', text: buildDirectiveBlock(directive, lead) },
-      ],
-      messages,
-    });
+  const reply = await withRetry({
+    attempts: 3,
+    log,
+    label: 'redator',
+    run: async () => {
+      const result = await getClient().models.generateContent({
+      model: env.GEMINI_WRITER_MODEL,
+      contents,
+      config: {
+          // A persona e fixa; a diretriz muda a cada turno. As duas juntas na
+          // instrucao de sistema mantem o historico livre de texto interno, que
+          // o lead nunca deve ver ecoado de volta.
+          systemInstruction: `${PERSONA}\n\n${buildDirectiveBlock(directive, lead)}`,
+          // O redator nao decide nada: a estrategia ja veio pronta. Pensar aqui
+          // so adiciona latencia a uma mensagem de 1-3 frases.
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          temperature: 0.9,
+          maxOutputTokens: env.GEMINI_WRITER_MAX_TOKENS,
+        },
+      });
 
-    const reply = extractText(response);
+      const usage = result.usageMetadata;
 
-    log.debug(`resposta redigida em ${Date.now() - startedAt}ms`, {
-      chatId: lead.chatId,
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      stopReason: response.stop_reason,
-    });
+      log.debug(`resposta redigida em ${Date.now() - startedAt}ms`, {
+        chatId: lead.chatId,
+        inputTokens: usage?.promptTokenCount,
+        outputTokens: usage?.candidatesTokenCount,
+        finishReason: result.candidates?.[0]?.finishReason,
+      });
 
-    return reply.length > 0 ? reply : fallbackReply(lead);
-  } catch (error) {
-    log.error('falha ao redigir a resposta; usando fallback', error);
-    return fallbackReply(lead);
-  }
+      return (result.text ?? '').trim();
+    },
+  });
+
+  return reply && reply.length > 0 ? reply : fallbackReply(lead);
 }

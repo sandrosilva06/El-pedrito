@@ -2,7 +2,7 @@
   "name": "el-pedrito",
   "version": "1.0.0",
   "private": true,
-  "description": "Backend autonomo para funil de vendas no Telegram com arquitetura hibrida de IA (Gemini estrategista + Claude redator)",
+  "description": "Backend autonomo para funil de vendas no Telegram com dois papeis de IA em cadeia (estrategista + redator) sobre o Gemini",
   "main": "dist/index.js",
   "engines": {
     "node": ">=22.5.0"
@@ -12,10 +12,10 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "chat": "tsx scripts/chat.ts"
+    "chat": "tsx scripts/chat.ts",
+    "models": "tsx scripts/models.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.124.0",
     "@google/genai": "^2.21.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",

@@ -5,10 +5,13 @@ Backend autônomo de um funil de vendas no Telegram, construído sobre uma
 
 | Papel | Modelo | Responsabilidade |
 | --- | --- | --- |
-| **Estrategista** | Gemini (`gemini-3.6-flash`) | Lê o histórico, classifica intenção/objeção/estágio e devolve uma **diretriz de vendas** em JSON. Nunca fala com o lead. |
-| **Redator** | Claude (`claude-opus-5`) | Recebe a diretriz e o histórico e escreve a **mensagem final**, informal e persuasiva, que vai para o lead. |
+| **Estrategista** | `gemini-3.6-flash` | Lê o histórico, classifica intenção/objeção/estágio e devolve uma **diretriz de vendas** em JSON. Nunca fala com o lead. |
+| **Redator** | `gemini-3.5-flash` | Recebe a diretriz e o histórico e escreve a **mensagem final**, informal e persuasiva, que vai para o lead. |
 
-Ambos os modelos são trocáveis por `GEMINI_MODEL` / `ANTHROPIC_MODEL` no `.env`.
+Os dois papéis usam o Gemini e a mesma `GEMINI_API_KEY`, mas continuam
+separados: o que sustenta a arquitetura é a divisão de responsabilidade — um
+decide, o outro escreve — não o fato de serem provedores distintos. Os modelos
+são trocáveis por `GEMINI_STRATEGIST_MODEL` / `GEMINI_WRITER_MODEL`.
 
 O objetivo do funil é levar o lead do primeiro contato até o cadastro e o
 primeiro depósito na plataforma de afiliados configurada.
@@ -43,14 +46,15 @@ Pontos de projeto que valem nota:
   conservadora assume (pergunta de qualificação, sem link). Se o Claude
   falhar, o lead recebe uma mensagem de "travou aqui" em vez de silêncio.
   Nenhum dos dois serviços lança exceção para cima.
-- **Retry no estrategista.** O Gemini devolve `503 high demand` com alguma
-  frequência; sem retry isso vira um turno perdido com o lead. São até 3
-  tentativas com backoff curto (400ms, 800ms) — curto porque do outro lado
-  tem alguém olhando o "digitando...".
-- **Sem `temperature` no Claude.** Os modelos atuais removeram os parâmetros
-  de sampling e retornam 400 se eles vierem na requisição. A variação de tom
-  vem do prompt e da diretriz. `output_config.effort: 'low'` mantém a
-  latência curta: quem raciocina é o Gemini, o Claude só redige 1-3 frases.
+- **Retry que respeita a quota.** O Gemini devolve `503 high demand` e `429`
+  de quota com alguma frequência; sem retry isso vira turno perdido com o
+  lead. O `429` traz um `retryDelay` dizendo quando a janela vira — um backoff
+  de centenas de milissegundos nunca alcança esse prazo, então a espera é a
+  maior entre o backoff e o que o servidor pediu, limitada a 20s.
+- **Thinking mínimo nos dois papéis.** Os modelos Gemini 3.x raciocinam antes
+  de responder e o thinking consome o mesmo orçamento de saída. O estrategista
+  já recebe o contexto pronto e o redator não decide nada — pensar só
+  adicionaria latência a uma mensagem de 1-3 frases.
 - **Estágio só avança.** `advanceStage` ignora retrocessos causados por
   classificação ruidosa do Gemini. A única exceção é `perdido`, marcável a
   qualquer momento (opt-out do lead).
@@ -77,8 +81,9 @@ cadastrado → deposito_enviado → depositado` (+ `perdido`).
 │   ├── db/
 │   │   └── database.ts       # node:sqlite: leads, histórico e estágios
 │   ├── services/
-│   │   ├── gemini.ts         # Estrategista — gera a diretriz de vendas
-│   │   └── claude.ts         # Redator — escreve a mensagem final
+│   │   ├── strategist.ts     # Gera a diretriz de vendas (JSON)
+│   │   ├── writer.ts         # Escreve a mensagem final para o lead
+│   │   └── retry.ts          # Retry compartilhado, respeita o 429 do Gemini
 │   ├── telegram/
 │   │   └── bot.ts            # Handlers, fila, rate limit, comandos
 │   ├── utils/
@@ -124,7 +129,7 @@ plataforma sem toolchain (Render, Railway, Fly, containers slim).
 
 ### Variáveis obrigatórias
 
-`TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`. O boot falha com
+`TELEGRAM_BOT_TOKEN` e `GEMINI_API_KEY`. O boot falha com
 uma lista explícita do que está faltando — não há default silencioso para
 credencial. Todas as demais estão documentadas no `.env.example`.
 
@@ -260,6 +265,24 @@ persistência por um banco gerenciado. O esquema está isolado em
 `node:sqlite` ainda é marcado como experimental no Node 22 (ele emite um aviso
 no boot) e estável no Node 24. A API usada aqui — `DatabaseSync`, `prepare`,
 `run`/`get`/`all`, `exec` — não mudou entre as duas versões.
+
+## Custo e limites do plano gratuito
+
+A cadeia gasta **duas chamadas por mensagem do lead** (estrategista + redator).
+No plano gratuito do Gemini a quota é contada **por modelo**
+(`GenerateRequestsPerMinutePerProjectPerModel`), então manter os dois papéis em
+modelos diferentes é o que dobra o teto efetivo — é por isso que os defaults
+não coincidem.
+
+Mesmo assim o limite é baixo para um funil com volume: são poucas requisições
+por minuto e por modelo, somando **todos** os leads ao mesmo tempo. Ao estourar,
+o retry espera o prazo que o próprio Gemini indica; se ainda assim não passar,
+o lead recebe a mensagem de fallback em vez de silêncio. Para volume real,
+ative o faturamento no Google AI Studio.
+
+`npm run models` lista os modelos que a sua chave serve — útil porque o Google
+retira modelos antigos: `gemini-1.5-flash` e `gemini-2.0-flash` já respondem
+404.
 
 ## Privacidade
 

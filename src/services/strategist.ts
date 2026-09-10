@@ -3,12 +3,13 @@ import { GoogleGenAI, ThinkingLevel, Type, type Schema } from '@google/genai';
 import { env } from '../config/env';
 import { FUNNEL_STAGES, type FunnelStage, type Lead, type StoredMessage } from '../db/database';
 import { createLogger } from '../utils/logger';
+import { withRetry } from './retry';
 
 const log = createLogger('gemini');
 
 /**
  * Saida do Estrategista. Nao e texto para o lead: e a diretriz interna que o
- * Claude recebe para redigir a resposta final.
+ * redator recebe para redigir a resposta final.
  */
 export interface SalesDirective {
   /** O que o lead quer neste momento, em uma frase. */
@@ -144,15 +145,6 @@ function fallbackDirective(lead: Lead): SalesDirective {
   };
 }
 
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-
-function isRetryable(error: unknown): boolean {
-  const status = (error as { status?: unknown })?.status;
-  return typeof status === 'number' && RETRYABLE_STATUS.has(status);
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 /**
  * Etapa 1 da cadeia: o Gemini le o contexto e devolve a diretriz de vendas.
  * Nunca lanca — em caso de erro devolve uma diretriz conservadora.
@@ -181,28 +173,17 @@ Devolva apenas o JSON da diretriz.`;
 
   const startedAt = Date.now();
 
-  // O 503 "high demand" do Gemini e comum e transitorio. Sem retry ele vira
-  // um turno perdido com o lead, entao tentamos de novo com backoff curto —
-  // curto porque do outro lado tem alguem olhando o "digitando...".
-  const MAX_ATTEMPTS = 3;
+  // O 503 "high demand" e o 429 de quota sao comuns e transitorios. Sem retry
+  // viram turno perdido com o lead; o withRetry respeita o prazo que o proprio
+  // Gemini pede no 429, que e o unico que tem chance de passar.
+  const directive = await withRetry({
+    attempts: 3,
+    log,
+    label: 'estrategista',
+    run: () => requestDirective({ lead, prompt, startedAt }),
+  });
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await requestDirective({ lead, prompt, startedAt });
-    } catch (error) {
-      if (attempt < MAX_ATTEMPTS && isRetryable(error)) {
-        const backoff = 400 * 2 ** (attempt - 1);
-        log.warn(`estrategista indisponivel (tentativa ${attempt}/${MAX_ATTEMPTS}); nova tentativa em ${backoff}ms`);
-        await sleep(backoff);
-        continue;
-      }
-
-      log.error('falha ao gerar a diretriz; usando fallback', error);
-      return fallbackDirective(lead);
-    }
-  }
-
-  return fallbackDirective(lead);
+  return directive ?? fallbackDirective(lead);
 }
 
 async function requestDirective(params: {

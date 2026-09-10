@@ -1,5 +1,5 @@
 /**
- * Harness de terminal para exercitar a cadeia Gemini -> Claude sem o Telegram.
+ * Harness de terminal para exercitar a cadeia estrategista -> redator, sem o Telegram.
  *
  *   npm run chat
  *
@@ -13,8 +13,8 @@ import { stdin, stdout } from 'node:process';
 process.env.DATABASE_PATH ??= './data/chat-harness.sqlite';
 
 import { addMessage, advanceStage, getRecentMessages, upsertLead } from '../src/db/database';
-import { planStrategy } from '../src/services/gemini';
-import { writeReply } from '../src/services/claude';
+import { planStrategy } from '../src/services/strategist';
+import { writeReply } from '../src/services/writer';
 
 const CHAT_ID = Number(process.env.CHAT_ID ?? -1);
 const NAME = process.env.LEAD_NAME ?? 'Sandro';
@@ -49,7 +49,7 @@ async function turn(incoming: string): Promise<void> {
   console.log(dim(`  │ cta        ${directive.cta}`));
   console.log(dim(`  │ link       ${directive.includeLink}   parar ${directive.shouldStop}`));
   console.log(dim('  └─'));
-  console.log(`\n${bold('BOT')} ${dim(`(Claude, ${t2 - t1}ms)`)}\n${answer}\n`);
+  console.log(`\n${bold('BOT')} ${dim(`(redator, ${t2 - t1}ms)`)}\n${answer}\n`);
 }
 
 async function main(): Promise<void> {
@@ -64,7 +64,7 @@ async function main(): Promise<void> {
   }
 
   const rl = readline.createInterface({ input: stdin, output: stdout });
-  console.log(dim('Cadeia Gemini -> Claude. Ctrl+C para sair.\n'));
+  console.log(dim('Cadeia estrategista -> redator. Ctrl+C para sair.\n'));
 
   for (;;) {
     const line = (await rl.question(bold('LEAD  '))).trim();

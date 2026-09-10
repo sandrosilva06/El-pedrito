@@ -4,6 +4,7 @@ import { env } from '../config/env';
 import type { RemarketingAudience } from '../db/database';
 import { createLogger } from '../utils/logger';
 import { sanitiseDashes } from '../utils/text';
+import { persona } from '../personas';
 import { withRetry } from './retry';
 
 const log = createLogger('remarketing');
@@ -22,42 +23,11 @@ function getClient(): GoogleGenAI {
  *
  * `{nome}` e substituido pelo primeiro nome do lead.
  */
-const FALLBACK_SCRIPTS: Record<RemarketingAudience, string[]> = {
-  nao_convertido: [
-    'Malandro, perdeste os greens de hoje... a malta no VIP esta a somar green atras de green! Ainda vais a tempo de entrar hoje, {nome}?',
-    '{nome}, o pessoal la dentro ja fechou o dia com lucro. Queres que te explique como entras, ou preferes que te deixe em paz?',
-    'Boas {nome}! O grupo hoje voltou a puxar forte. Se ainda tiveres interesse, e so dizeres que eu explico o resto.',
-  ],
-  vip: [
-    'Boas companheiro! Ja foste dar uma olhadela as entradas que mandei hoje no VIP? Nao deixes passar os greens!',
-    '{nome}, mandei as entradas do dia no grupo. Da la um salto antes que os jogos comecem.',
-    'Tudo bem {nome}? Passa pelo VIP para veres o que ja saiu hoje, nao quero que percas nenhuma.',
-  ],
-  promessa: [
-    'Boas malandro, ja saiste do trabalho? As apostas da noite saem daqui a bocado no VIP, estas pronto para abrires a conta e entrares?',
-    '{nome}, conforme combinado aqui estou eu. Ja tens um bocadinho para tratar disso?',
-    'Boas {nome}, ficou combinado que te apitava a esta hora. Ainda vais a tempo das entradas de hoje.',
-  ],
-};
-
-const BRIEFS: Record<RemarketingAudience, string> = {
-  nao_convertido: `Estes leads falaram contigo e nao avancaram para o grupo.
-A mensagem deve criar a sensacao de estarem a perder algo real que esta a
-acontecer agora no grupo, e terminar com uma pergunta facil de responder.
-Nao repitas condicoes de entrada nem mandes o link: o objetivo e so reabrir a
-conversa.`,
-  vip: `Estes leads ja estao no grupo VIP. A mensagem deve puxa-los de volta ao
-grupo para verem as entradas do dia. Tom de companheirismo, nada de vendas —
-estas pessoas ja compraram.`,
-  promessa: `Este lead disse que tratava do assunto a esta hora e tu ficaste de
-lhe apitar. A mensagem e o cumprimento desse combinado, nao uma cobranca:
-lembra que ficou combinado, pergunta se ele ja tem um bocadinho, e refere que
-as entradas de hoje ainda vao a tempo. Nada de pressao e nada de queixume por
-ele nao ter feito ainda.`,
-};
+const FALLBACK_SCRIPTS = persona.remarketing.fallbacks;
+const BRIEFS = persona.remarketing.briefs;
 
 function buildPrompt(audience: RemarketingAudience): string {
-  return `Es o ${env.AGENT_NAME}, dono do grupo "${env.GROUP_NAME}".
+  return `Es o ${persona.agentName}.
 
 Escreve UMA mensagem de acompanhamento para enviar por Telegram.
 

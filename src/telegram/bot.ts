@@ -19,6 +19,7 @@ import { planStrategy, type SalesDirective } from '../services/strategist';
 import { splitIntoBubbles } from '../services/writer';
 import { writeReply } from '../services/writer';
 import { createLogger } from '../utils/logger';
+import { persona } from '../personas';
 import { sanitiseDashes } from '../utils/text';
 import { nextOccurrenceUtc } from '../utils/timezone';
 
@@ -213,11 +214,7 @@ bot.command('start', async (ctx) => {
 
   advanceStage(lead.chatId, 'qualificacao');
 
-  const name = lead.firstName ? ` ${lead.firstName}` : '';
-  const greeting =
-    `Olá${name}, tudo bem? Sou o ${env.AGENT_NAME}, do grupo ${env.GROUP_NAME}.\n\n` +
-    `Este grupo foi lançado para ${env.TARGET_AUDIENCE}. Diz-me só uma coisa: ` +
-    'já costumas acompanhar apostas desportivas ou seria a primeira vez?';
+  const greeting = persona.greeting(lead.firstName);
 
   addMessage({ chatId: lead.chatId, role: 'assistant', content: greeting });
   dispatchMessage(ctx, lead.chatId, greeting);
@@ -442,10 +439,7 @@ bot.on([':photo', ':document'], async (ctx) => {
     content: '[o lead enviou um comprovativo de deposito]',
   });
 
-  const name = lead.firstName ? `, ${lead.firstName}` : '';
-  const answer =
-    `Obrigado pelo print${name}! Vou validar a tua conta e o teu depósito ` +
-    'e já te liberto o acesso ao grupo VIP.';
+  const answer = persona.proofAcknowledgement(lead.firstName);
 
   addMessage({ chatId: lead.chatId, role: 'assistant', content: answer });
   dispatchMessage(ctx, lead.chatId, answer);
@@ -523,7 +517,7 @@ bot.on('message', async (ctx) => {
   const lead = leadFromContext(ctx);
   if (!lead) return;
 
-  await ctx.reply('Escreve-me antes por texto, que assim consigo ajudar-te melhor.');
+  await ctx.reply(persona.nonTextNudge);
 });
 
 // ---------------------------------------------------------------------------

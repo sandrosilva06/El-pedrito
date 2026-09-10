@@ -83,6 +83,9 @@ const schema = z
     DATABASE_PATH: optionalString.transform((value) => value ?? './data/funnel.sqlite'),
     HISTORY_WINDOW: intFromString(20, 2, 100),
 
+    /** Influencer activo. Ver src/personas/. */
+    BOT_PERSONA: optionalString.transform((value) => value ?? 'el_pedrito'),
+
     AGENT_NAME: optionalString.transform((value) => value ?? 'El Pedrito'),
     /** Grupo VIP que o funil promove — o produto desta fase. */
     GROUP_NAME: optionalString.transform((value) => value ?? 'El Pedrito Tips'),
@@ -124,6 +127,21 @@ const schema = z
     ),
     /** Valor sugerido como ideal para acompanhar as entradas do dia. */
     SUGGESTED_DEPOSIT: optionalString.transform((value) => value ?? '50€'),
+
+    // --- Ivan Rodrigues ----------------------------------------------------
+    IVAN_NAME: optionalString.transform((value) => value ?? 'Ivan Rodrigues'),
+    IVAN_MIN_DEPOSIT: optionalString.transform((value) => value ?? '25€'),
+    /**
+     * Lifestyle que o Ivan pode referir. Fica em variavel, e nao fixo no
+     * prompt, pela mesma razao dos numeros de resultados: e uma afirmacao de
+     * facto sobre bens e ganhos, dita ao lead antes de ele depositar. Vazia,
+     * o Ivan nao fala de carros nem de casas.
+     */
+    IVAN_LIFESTYLE_CLAIM: optionalString.transform((value) => value ?? ''),
+    /** Casas do Ivan. A Plan Bet e a principal. */
+    PLANBET_LINK: optionalString.transform((value) => value ?? ''),
+    CASINO22_LINK: optionalString.transform((value) => value ?? ''),
+    GINJA_LINK: optionalString.transform((value) => value ?? ''),
 
     MIN_AGE: intFromString(18, 0, 99),
     COMPLIANCE_NOTE: optionalString.transform(

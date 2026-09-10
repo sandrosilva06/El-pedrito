@@ -23,6 +23,34 @@ Todo o atendimento é em **português de Portugal**.
 
 ---
 
+## Personas
+
+O bot encarna um influencer de cada vez, escolhido por `BOT_PERSONA`:
+
+| Valor | Influencer | Nicho | Depósito | Casas |
+| --- | --- | --- | --- | --- |
+| `el_pedrito` (default) | El Pedrito | Apostas desportivas | 20€ | uma |
+| `ivan` | Ivan Rodrigues | Sinais de Bac Bo | 25€ | Plan Bet, 22 Casino, Ginja |
+
+Cada persona vive no seu ficheiro em `src/personas/` e **não conhece as
+outras**: prompts, saudação, mensagens de falha, guiões de remarketing e casas.
+O motor — funil, fila, ritmo de escrita, sanitizador, agendador — é comum.
+
+Um `BOT_PERSONA` desconhecido cai no `el_pedrito` e grita no log. Uma variável
+mal escrita não pode trocar de influencer a meio de conversas a decorrer.
+
+Os prompts do El Pedrito foram movidos para `personas/el-pedrito.ts` sem uma
+vírgula mudada. Há um baseline gravado antes da extração e o prompt do
+estrategista tem o mesmo MD5 depois dela.
+
+### Multi-casa
+
+Personas com mais do que uma casa usam o campo `affiliateHouse` da diretriz.
+O funil começa pela principal; se o lead já tiver conta lá, o estrategista
+oferece as alternativas e só preenche o campo depois de ele escolher — nunca
+adivinha. Uma casa desconhecida cai na principal, porque perder a conversão
+por um identificador mal escrito é pior do que mandar para a casa errada.
+
 ## Arquitetura
 
 ```

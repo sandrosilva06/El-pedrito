@@ -8,6 +8,7 @@ import {
   forgetLead,
   getRecentMessages,
   getStats,
+  recordDepositProof,
   setNotes,
   upsertLead,
   type Lead,
@@ -143,8 +144,9 @@ bot.command('start', async (ctx) => {
 
   const name = lead.firstName ? ` ${lead.firstName}` : '';
   const greeting =
-    `Opa${name}, tudo certo? Aqui é o ${env.AGENT_NAME}, da ${env.PLATFORM_NAME}.\n\n` +
-    'Me conta rapidinho: você já usou alguma plataforma dessas antes ou seria a primeira vez?';
+    `Olá${name}, tudo bem? Sou o ${env.AGENT_NAME}, do grupo ${env.GROUP_NAME}.\n\n` +
+    `Este grupo foi lançado para ${env.TARGET_AUDIENCE}. Diz-me só uma coisa: ` +
+    'já costumas acompanhar apostas desportivas ou seria a primeira vez?';
 
   addMessage({ chatId: lead.chatId, role: 'assistant', content: greeting });
   await reply(ctx, greeting);
@@ -156,7 +158,7 @@ bot.command('reset', async (ctx) => {
 
   clearHistory(lead.chatId);
   setNotes(lead.chatId, null);
-  await ctx.reply('Beleza, zerei nossa conversa. Manda aí o que você quer saber.');
+  await ctx.reply('Pronto, limpei a nossa conversa. Diz-me o que queres saber.');
 });
 
 bot.command('parar', async (ctx) => {
@@ -165,8 +167,8 @@ bot.command('parar', async (ctx) => {
 
   forgetLead(chatId);
   await ctx.reply(
-    'Sem problema, não te chamo mais. Apaguei nossa conversa aqui. ' +
-      'Se mudar de ideia é só mandar /start.',
+    'Sem problema, não te volto a incomodar. Apaguei a nossa conversa. ' +
+      'Se mudares de ideias, é só mandares /start.',
   );
 });
 
@@ -185,7 +187,8 @@ bot.command('stats', async (ctx) => {
     .join('\n');
 
   await ctx.reply(
-    `Leads: ${stats.totalLeads}\nMensagens: ${stats.totalMessages}\n\nPor estágio:\n${stages || '  (vazio)'}`,
+    `Leads: ${stats.totalLeads}\nMensagens: ${stats.totalMessages}\n` +
+      `Comprovativos por validar: ${stats.pendingProofs}\n\nPor estágio:\n${stages || '  (vazio)'}`,
   );
 });
 
@@ -248,14 +251,108 @@ bot.on('message:text', async (ctx) => {
   });
 });
 
+/**
+ * Comprovativo de deposito. O bot NUNCA aprova sozinho: guarda o ficheiro,
+ * avisa quem valida e responde ao lead que a validacao esta em curso. Libertar
+ * o acesso automaticamente daria grupo a quem mandasse qualquer imagem.
+ */
+bot.on([':photo', ':document'], async (ctx) => {
+  const lead = leadFromContext(ctx);
+  if (!lead) return;
+
+  const message = ctx.message;
+  if (!message) return;
+
+  // A foto vem em varios tamanhos; o ultimo e o de maior resolucao, que e o
+  // unico em que se consegue ler o valor do comprovativo.
+  const photo = message.photo?.[message.photo.length - 1];
+  const document = message.document;
+
+  // Um PDF ou uma imagem enviada como ficheiro tambem servem de comprovativo;
+  // outros anexos, nao.
+  const isImageDocument = document?.mime_type?.startsWith('image/') === true;
+  const isPdfDocument = document?.mime_type === 'application/pdf';
+
+  const fileId = photo?.file_id ?? (isImageDocument || isPdfDocument ? document?.file_id : undefined);
+
+  if (!fileId) {
+    await ctx.reply('Manda antes um print ou uma foto do comprovativo, se faz favor.');
+    return;
+  }
+
+  const proof = recordDepositProof({
+    chatId: lead.chatId,
+    leadName: lead.firstName,
+    username: lead.username,
+    fileId,
+    messageId: message.message_id,
+  });
+
+  advanceStage(lead.chatId, 'comprovativo_recebido');
+
+  // Fica no historico para o estrategista nao voltar a pedir o comprovativo.
+  addMessage({
+    chatId: lead.chatId,
+    role: 'user',
+    content: '[o lead enviou um comprovativo de deposito]',
+  });
+
+  const name = lead.firstName ? `, ${lead.firstName}` : '';
+  const answer =
+    `Obrigado pelo print${name}! Vou validar a tua conta e o teu depósito ` +
+    'e já te liberto o acesso ao grupo VIP.';
+
+  addMessage({ chatId: lead.chatId, role: 'assistant', content: answer });
+  await ctx.reply(answer);
+
+  log.info(
+    `comprovativo #${proof.id} recebido — chat=${lead.chatId} nome=${lead.firstName ?? '?'} ` +
+      `username=${lead.username ? '@' + lead.username : '?'} aguarda validacao manual`,
+  );
+
+  await notifyAdmins(proof.id, lead, fileId);
+});
+
+/**
+ * Encaminha o comprovativo a quem valida. Sem isto o registo ficaria so na base
+ * de dados e o lead esperaria por alguem que nao sabe que ele existe.
+ */
+async function notifyAdmins(proofId: number, lead: Lead, fileId: string): Promise<void> {
+  if (adminChatIds.size === 0) {
+    log.warn('ADMIN_CHAT_IDS vazio: comprovativo guardado, mas ninguem foi avisado');
+    return;
+  }
+
+  const caption =
+    `Comprovativo #${proofId} para validar\n` +
+    `Lead: ${lead.firstName ?? '(sem nome)'}${lead.username ? ` (@${lead.username})` : ''}\n` +
+    `chat_id: ${lead.chatId}\n` +
+    `Estagio: comprovativo_recebido`;
+
+  for (const adminId of adminChatIds) {
+    try {
+      // Reenvia por file_id: nao ha download nem reupload do ficheiro.
+      await bot.api.sendPhoto(adminId, fileId, { caption });
+    } catch (error) {
+      // Pode nao ser uma foto (PDF), ou o admin pode nunca ter falado com o bot.
+      try {
+        await bot.api.sendMessage(adminId, caption);
+      } catch (fallbackError) {
+        log.error(`falha ao avisar o admin ${adminId} do comprovativo #${proofId}`, fallbackError);
+      }
+    }
+  }
+}
+
 bot.on('message', async (ctx) => {
-  // Audio, foto, sticker: o funil e apenas texto, entao pedimos texto.
+  // Texto e comprovativos ja foram tratados acima. Aqui sobram audio,
+  // sticker, localizacao: o funil e por texto.
   if ('text' in ctx.message) return;
 
   const lead = leadFromContext(ctx);
   if (!lead) return;
 
-  await ctx.reply('Consigo te ajudar melhor por texto — me escreve aí o que você precisa.');
+  await ctx.reply('Escreve-me antes por texto, que assim consigo ajudar-te melhor.');
 });
 
 // ---------------------------------------------------------------------------
@@ -277,5 +374,5 @@ bot.catch((err) => {
 export const BOT_COMMANDS = [
   { command: 'start', description: 'Começar a conversa' },
   { command: 'reset', description: 'Limpar o histórico da conversa' },
-  { command: 'parar', description: 'Encerrar e apagar meus dados' },
+  { command: 'parar', description: 'Terminar e apagar os meus dados' },
 ];

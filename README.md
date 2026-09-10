@@ -13,8 +13,13 @@ separados: o que sustenta a arquitetura é a divisão de responsabilidade — um
 decide, o outro escreve — não o fato de serem provedores distintos. Os modelos
 são trocáveis por `GEMINI_STRATEGIST_MODEL` / `GEMINI_WRITER_MODEL`.
 
-O objetivo do funil é levar o lead do primeiro contato até o cadastro e o
-primeiro depósito na plataforma de afiliados configurada.
+O funil promove o grupo VIP **El Pedrito Tips**, lançado para portugueses
+emigrantes na Suíça. O produto desta fase é a **entrada no grupo** — não o
+casino. Entrar é gratuito; o acesso desbloqueia-se com registo e um depósito
+mínimo na plataforma configurada, que fica como saldo do próprio lead. O acesso
+só é libertado depois de validação **humana** do comprovativo.
+
+Todo o atendimento é em **português de Portugal**.
 
 ---
 
@@ -67,8 +72,32 @@ Pontos de projeto que valem nota:
 
 ### Estágios do funil
 
-`novo → qualificacao → apresentacao → objecao → cadastro_enviado →
-cadastrado → deposito_enviado → depositado` (+ `perdido`).
+`novo → qualificacao → apresentacao → objecao → registo_enviado → registado →
+deposito_enviado → comprovativo_recebido → acesso_liberado` (+ `perdido`).
+
+Os nomes antigos (`cadastro_enviado`, `cadastrado`, `depositado`) são mapeados
+na leitura, para um lead a meio do funil não voltar a `novo` no primeiro deploy.
+
+### Perfil do lead
+
+O estrategista classifica cada lead e o redator adapta-se: `cetico`
+(transparência e empatia, admite que as entradas falham), `sem_dinheiro`
+(a entrada é gratuita e o depósito é saldo dele), `dificil` (paciência, uma
+explicação de cada vez), `recetivo` (vai direto ao passo seguinte),
+`indefinido` (pergunta aberta).
+
+### Comprovativo de depósito
+
+Quando o lead envia uma foto ou um ficheiro de imagem/PDF, o bot **não aprova
+nada**: guarda o `file_id` da versão de maior resolução em `deposit_proofs`
+como `pendente`, avança o estágio, responde que a validação está em curso, e
+reencaminha o comprovativo para cada chat em `ADMIN_CHAT_IDS` com o id, nome e
+`chat_id` do lead. Aprovar automaticamente daria acesso a quem enviasse
+qualquer imagem.
+
+Com `ADMIN_CHAT_IDS` vazio o print é guardado mas **ninguém é avisado** — o
+lead fica à espera de uma validação que ninguém sabe que existe. O boot avisa
+disso no log.
 
 ---
 
@@ -234,6 +263,9 @@ que a diretriz não possa pedir o que o redator não pode escrever:
   financeiro ou idade abaixo de `MIN_AGE`;
 - o link só sai quando o lead demonstra interesse concreto, e sempre
   acompanhado do `COMPLIANCE_NOTE`;
+- nunca inventar percentagens de acerto: o redator só cita o que estiver em
+  `HIT_RATE_CLAIM`, e com a variável vazia fala de assertividade sem números;
+- nunca confirmar que o acesso ao grupo foi dado — quem valida é uma pessoa;
 - se o lead perguntar diretamente se está falando com um bot, o redator
   assume que é um atendimento automatizado — a persona é informal, não é
   um disfarce.

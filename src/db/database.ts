@@ -17,12 +17,24 @@ export const FUNNEL_STAGES = [
   'qualificacao',
   'apresentacao',
   'objecao',
-  'cadastro_enviado',
-  'cadastrado',
+  'registo_enviado',
+  'registado',
   'deposito_enviado',
-  'depositado',
+  'comprovativo_recebido',
+  'acesso_liberado',
   'perdido',
 ] as const;
+
+/**
+ * Nomes anteriores dos estagios (PT-BR, antes do passo do comprovativo).
+ * Sem este mapa, um lead a meio do funil voltaria a 'novo' no primeiro deploy
+ * e o estrategista recomecaria a conversa do zero com quem ja estava adiantado.
+ */
+const LEGACY_STAGES: Record<string, FunnelStage> = {
+  cadastro_enviado: 'registo_enviado',
+  cadastrado: 'registado',
+  depositado: 'acesso_liberado',
+};
 
 export type FunnelStage = (typeof FUNNEL_STAGES)[number];
 
@@ -53,10 +65,24 @@ export interface StoredMessage {
   createdAt: string;
 }
 
+/** Comprovativo de deposito enviado pelo lead, a espera de validacao humana. */
+export interface DepositProof {
+  id: number;
+  chatId: number;
+  leadName: string | null;
+  username: string | null;
+  fileId: string;
+  messageId: number | null;
+  status: 'pendente' | 'aprovado' | 'recusado';
+  createdAt: string;
+}
+
 export interface FunnelStats {
   totalLeads: number;
   totalMessages: number;
   byStage: Record<string, number>;
+  /** Comprovativos a espera de alguem os validar. */
+  pendingProofs: number;
 }
 
 interface LeadRow {
@@ -119,6 +145,19 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS deposit_proofs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id     INTEGER NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
+    lead_name   TEXT,
+    username    TEXT,
+    file_id     TEXT NOT NULL,
+    message_id  INTEGER,
+    status      TEXT NOT NULL DEFAULT 'pendente'
+                CHECK (status IN ('pendente', 'aprovado', 'recusado')),
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_proofs_status ON deposit_proofs (status, id DESC);
   CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages (chat_id, id DESC);
   CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads (stage);
 `);
@@ -158,7 +197,8 @@ function asRows<T>(value: unknown): T[] {
 }
 
 function toStage(value: string): FunnelStage {
-  return STAGE_ORDER.has(value as FunnelStage) ? (value as FunnelStage) : 'novo';
+  if (STAGE_ORDER.has(value as FunnelStage)) return value as FunnelStage;
+  return LEGACY_STAGES[value] ?? 'novo';
 }
 
 function mapLead(row: LeadRow): Lead {
@@ -222,7 +262,47 @@ const statements = {
   countLeads: db.prepare('SELECT COUNT(*) AS total FROM leads'),
   countMessages: db.prepare('SELECT COUNT(*) AS total FROM messages'),
   countByStage: db.prepare('SELECT stage, COUNT(*) AS total FROM leads GROUP BY stage'),
+  insertProof: db.prepare(`
+    INSERT INTO deposit_proofs (chat_id, lead_name, username, file_id, message_id)
+    VALUES (?, ?, ?, ?, ?)
+  `),
+  countPendingProofs: db.prepare(
+    "SELECT COUNT(*) AS total FROM deposit_proofs WHERE status = 'pendente'",
+  ),
+  deleteProofs: db.prepare('DELETE FROM deposit_proofs WHERE chat_id = ?'),
 };
+
+/**
+ * Guarda o comprovativo enviado pelo lead. Nao aprova nada: o registo fica
+ * pendente para uma pessoa validar, que e a regra do funil — o bot nunca
+ * liberta acesso sozinho.
+ */
+export function recordDepositProof(input: {
+  chatId: number;
+  leadName: string | null;
+  username: string | null;
+  fileId: string;
+  messageId: number | null;
+}): DepositProof {
+  const result = statements.insertProof.run(
+    input.chatId,
+    input.leadName,
+    input.username,
+    input.fileId,
+    input.messageId,
+  );
+
+  return {
+    id: Number(result.lastInsertRowid),
+    chatId: input.chatId,
+    leadName: input.leadName,
+    username: input.username,
+    fileId: input.fileId,
+    messageId: input.messageId,
+    status: 'pendente',
+    createdAt: new Date().toISOString(),
+  };
+}
 
 /** Cria o lead se ele ainda nao existir e devolve o registro atualizado. */
 export function upsertLead(input: {
@@ -307,6 +387,7 @@ export function clearHistory(chatId: number): void {
 /** Remove lead e historico — usado pelo /parar, para respeitar o opt-out. */
 export function forgetLead(chatId: number): void {
   inTransaction(() => {
+    statements.deleteProofs.run(chatId);
     statements.deleteMessages.run(chatId);
     statements.deleteLead.run(chatId);
   });
@@ -316,13 +397,19 @@ export function getStats(): FunnelStats {
   const leads = asRow<{ total: number }>(statements.countLeads.get());
   const messages = asRow<{ total: number }>(statements.countMessages.get());
   const stages = asRows<{ stage: string; total: number }>(statements.countByStage.all());
+  const proofs = asRow<{ total: number }>(statements.countPendingProofs.get());
 
   const byStage: Record<string, number> = {};
   for (const row of stages) {
     byStage[row.stage] = row.total;
   }
 
-  return { totalLeads: leads?.total ?? 0, totalMessages: messages?.total ?? 0, byStage };
+  return {
+    totalLeads: leads?.total ?? 0,
+    totalMessages: messages?.total ?? 0,
+    byStage,
+    pendingProofs: proofs?.total ?? 0,
+  };
 }
 
 export function closeDatabase(): void {

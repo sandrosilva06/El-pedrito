@@ -74,15 +74,30 @@ const schema = z
     HISTORY_WINDOW: intFromString(20, 2, 100),
 
     AGENT_NAME: optionalString.transform((value) => value ?? 'Pedrito'),
-    PLATFORM_NAME: optionalString.transform((value) => value ?? 'a plataforma'),
+    /** Grupo VIP que o funil promove — o produto desta fase. */
+    GROUP_NAME: optionalString.transform((value) => value ?? 'El Pedrito Tips'),
+    /** Publico a que o grupo se dirige, citado como posicionamento. */
+    TARGET_AUDIENCE: optionalString.transform(
+      (value) => value ?? 'portugueses emigrantes na Suica',
+    ),
+    /** Casa onde o lead faz registo e deposito para desbloquear o grupo. */
+    PLATFORM_NAME: optionalString.transform((value) => value ?? 'GangstaZino'),
     AFFILIATE_LINK: optionalString.transform((value) => value ?? ''),
-    CURRENT_OFFER: optionalString.transform((value) => value ?? 'bonus de boas-vindas'),
-    MIN_DEPOSIT: optionalString.transform((value) => value ?? 'R$ 20'),
+    MIN_DEPOSIT: optionalString.transform((value) => value ?? '20€'),
+    /** Quantas entradas o grupo envia por dia. */
+    TIPS_PER_DAY: intFromString(8, 1, 100),
+    /**
+     * Afirmacao sobre taxa de acerto. Fica em variavel porque e um numero de
+     * negocio: o redator tem instrucao de nunca inventar percentagens, entao
+     * so diz o que estiver aqui. Vazio = fala de assertividade em termos
+     * qualitativos, sem numeros.
+     */
+    HIT_RATE_CLAIM: optionalString.transform((value) => value ?? ''),
     MIN_AGE: intFromString(18, 0, 99),
     COMPLIANCE_NOTE: optionalString.transform(
       (value) =>
         value ??
-        'Conteudo para maiores de 18 anos. Invista/aposte apenas o que puder perder.',
+        'Conteudo para maiores de 18 anos. Aposta apenas o que podes perder.',
     ),
 
     RATE_LIMIT_MAX: intFromString(12, 1, 1000),

@@ -48,6 +48,10 @@ const schema = z
     TELEGRAM_MODE: z.enum(['polling', 'webhook']).optional(),
     TELEGRAM_WEBHOOK_URL: optionalString,
     TELEGRAM_WEBHOOK_SECRET: optionalString,
+    // Caminho registrado no Telegram. O default e /webhook por ser o que se
+    // consegue verificar a olho — o segredo no header e que autentica, nao a
+    // obscuridade do caminho.
+    TELEGRAM_WEBHOOK_PATH: optionalString,
     // O Render injeta a URL publica do servico automaticamente. Servem de
     // fallback para quem esquece de configurar TELEGRAM_WEBHOOK_URL.
     RENDER_EXTERNAL_URL: optionalString,
@@ -107,8 +111,10 @@ export type Env = Omit<
   GEMINI_MODEL: string;
   /** Alias fixo aceito junto da rota principal. */
   webhookAliasPath: string;
-  /** Se o modo veio de TELEGRAM_MODE ou foi deduzido da URL publica. */
-  modeSource: 'explicito' | 'automatico';
+  /** De onde veio o modo: config explicita, deducao, ou imposicao de producao. */
+  modeSource: 'explicito' | 'automatico' | 'forcado-em-producao';
+  /** Producao sem URL publica: nao da para registrar webhook e o bot fica mudo. */
+  missingPublicUrlInProduction: boolean;
 };
 
 /**
@@ -119,6 +125,15 @@ export type Env = Omit<
  */
 function deriveWebhookSecret(token: string): string {
   return createHash('sha256').update(`telegram-webhook:${token}`).digest('hex');
+}
+
+function normalizeWebhookPath(value: string | undefined): string | null {
+  if (!value) return null;
+
+  const trimmed = value.trim().replace(/\/+$/, '');
+  if (trimmed.length === 0) return null;
+
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 }
 
 function normalizePublicUrl(value: string | undefined): string | null {
@@ -168,7 +183,24 @@ function load(): Env {
 
   const publicUrl = normalizePublicUrl(value.TELEGRAM_WEBHOOK_URL) ?? renderUrl;
 
-  const mode = value.TELEGRAM_MODE ?? (publicUrl ? 'webhook' : 'polling');
+  const inProduction = value.NODE_ENV === 'production';
+
+  // Em producao com URL publica o webhook e imposto, mesmo contra um
+  // TELEGRAM_MODE=polling deixado para tras na plataforma: um servico que
+  // hiberna por inatividade nunca volta a fazer polling depois do primeiro
+  // spin-down, e o resultado e um bot silenciosamente morto. A imposicao
+  // aparece no /health e nos logs — nao e silenciosa.
+  const forcedByProduction = inProduction && Boolean(publicUrl) && value.TELEGRAM_MODE === 'polling';
+
+  const mode =
+    inProduction && publicUrl
+      ? 'webhook'
+      : (value.TELEGRAM_MODE ?? (publicUrl ? 'webhook' : 'polling'));
+
+  // Producao sem URL publica nao tem como registrar webhook. Nao derruba o
+  // boot: o processo sobe em polling para o /health poder explicar o motivo,
+  // o que e mais util que um container reiniciando em loop.
+  const missingPublicUrlInProduction = inProduction && !publicUrl;
 
   if (mode === 'webhook' && !publicUrl) {
     throw new Error(
@@ -188,6 +220,8 @@ function load(): Env {
     throw new Error('TELEGRAM_WEBHOOK_SECRET precisa ter ao menos 16 caracteres.');
   }
 
+  const webhookPath = normalizeWebhookPath(value.TELEGRAM_WEBHOOK_PATH) ?? '/webhook';
+
   return {
     ...value,
     TELEGRAM_MODE: mode,
@@ -198,9 +232,16 @@ function load(): Env {
     GEMINI_MODEL:
       value.GEMINI_STRATEGIST_MODEL ?? value.GEMINI_MODEL ?? 'gemini-3.6-flash',
     databaseFile,
-    webhookPath: `/telegram/${tokenTail}`,
-    webhookAliasPath: '/webhook',
-    modeSource: value.TELEGRAM_MODE ? 'explicito' : 'automatico',
+    webhookPath,
+    // O caminho derivado do token continua aceito, para nao quebrar um webhook
+    // que ja tenha sido registrado nele.
+    webhookAliasPath: `/telegram/${tokenTail}`,
+    modeSource: forcedByProduction
+      ? 'forcado-em-producao'
+      : value.TELEGRAM_MODE
+        ? 'explicito'
+        : 'automatico',
+    missingPublicUrlInProduction,
   };
 }
 

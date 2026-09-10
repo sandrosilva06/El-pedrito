@@ -23,6 +23,7 @@ const telegram: {
   mode: string;
   modeSource: string;
   publicUrl: string | null;
+  webhookUrl: string | null;
   botUsername: string | null;
   webhookRegistered: boolean;
   pendingUpdates: number | null;
@@ -32,6 +33,10 @@ const telegram: {
   mode: env.TELEGRAM_MODE,
   modeSource: env.modeSource,
   publicUrl: env.TELEGRAM_WEBHOOK_URL,
+  webhookUrl:
+    env.TELEGRAM_MODE === 'webhook' && env.TELEGRAM_WEBHOOK_URL
+      ? `${env.TELEGRAM_WEBHOOK_URL}${env.webhookPath}`
+      : null,
   botUsername: null,
   webhookRegistered: false,
   pendingUpdates: null,
@@ -113,6 +118,22 @@ async function start(): Promise<void> {
     log.info(`HTTP ouvindo na porta ${env.PORT}`);
   });
 
+  if (env.modeSource === 'forcado-em-producao') {
+    log.warn(
+      'TELEGRAM_MODE pedia polling, mas em producao com URL publica o webhook e imposto ' +
+        '— em polling o servico fica mudo apos hibernar. Remova a variavel para silenciar este aviso.',
+    );
+  }
+
+  if (env.missingPublicUrlInProduction) {
+    // Producao sem URL publica: o bot nao vai receber nada. Melhor gritar aqui
+    // e no /health do que deixar o servico "no ar" e mudo.
+    telegram.error =
+      'producao sem URL publica: defina TELEGRAM_WEBHOOK_URL com a URL https:// do servico ' +
+      '(o Render normalmente injeta RENDER_EXTERNAL_URL sozinho)';
+    log.error(telegram.error);
+  }
+
   try {
     await bot.init();
     telegram.botUsername = bot.botInfo.username;
@@ -135,6 +156,7 @@ async function start(): Promise<void> {
 
 async function startWebhook(): Promise<void> {
   const url = `${env.TELEGRAM_WEBHOOK_URL}${env.webhookPath}`;
+
 
   await bot.api.setWebhook(url, {
     secret_token: env.TELEGRAM_WEBHOOK_SECRET,

@@ -142,25 +142,33 @@ das duas IAs.
 ## Polling x Webhook
 
 **O modo é decidido sozinho.** Havendo URL pública — `TELEGRAM_WEBHOOK_URL`, ou
-`RENDER_EXTERNAL_URL` que o Render injeta — o boot usa webhook e o registra no
-Telegram. Sem ela, usa long polling. `TELEGRAM_MODE` só existe para forçar um
-dos dois.
+`RENDER_EXTERNAL_URL` / `RENDER_EXTERNAL_HOSTNAME` que o Render injeta — o boot
+usa webhook e o registra no Telegram. Sem ela, usa long polling.
 
-O motivo do automático: um serviço web alcançável pela internet deve receber
-webhook. Em polling numa plataforma que hiberna por inatividade, o serviço
-dorme, ninguém faz polling, e nada volta a acordá-lo — o bot fica mudo até o
-próximo deploy, sem erro em lugar nenhum.
+**Em `NODE_ENV=production` com URL pública o webhook é imposto**, mesmo contra
+um `TELEGRAM_MODE=polling` deixado para trás na plataforma. Numa plataforma que
+hiberna por inatividade, o serviço em polling dorme, ninguém faz polling, e nada
+volta a acordá-lo — o bot fica mudo até o próximo deploy, sem erro em lugar
+nenhum. A imposição não é silenciosa: aparece nos logs e como
+`modeSource: "forcado-em-producao"` no `/health`.
+
+Produção **sem** URL pública nenhuma não derruba o boot: o serviço sobe e o
+`/health` responde `degraded` dizendo qual variável falta. Um container em
+crash-loop não conseguiria contar isso.
+
+A URL registrada é `<URL pública>/webhook`, configurável por
+`TELEGRAM_WEBHOOK_PATH`.
 
 `TELEGRAM_WEBHOOK_SECRET` é opcional: sem ele, um valor estável é derivado do
 token do bot. Exigir a variável faria o boot falhar em quem só configurou a
 URL, e um deploy que não sobe ajuda menos que um segredo derivado.
 
-A rota registrada no Telegram é derivada do token
-(`/telegram/<cauda-do-token>`), mas `/webhook` também é aceito — é o caminho
-que se digita ao apontar o webhook à mão, e um POST no caminho errado daria
-404 sem nenhuma pista. Ambos exigem o header
-`X-Telegram-Bot-Api-Secret-Token`; sem ele, `401`. Em modo polling as duas
-rotas respondem `409` explicando que aquele servidor não entrega updates.
+O POST é aceito tanto em `/webhook` quanto no caminho derivado do token
+(`/telegram/<cauda-do-token>`), que continua válido para não quebrar um webhook
+já registrado nele. Ambos exigem o header `X-Telegram-Bot-Api-Secret-Token`;
+sem ele, `401` — é o segredo que autentica a requisição, não a obscuridade do
+caminho. Em modo polling as duas rotas respondem `409` explicando que aquele
+servidor não entrega updates.
 
 > **Ao mexer em `src/index.ts`:** o `webhookCallback()` da grammY não devolve
 > apenas um handler — ele substitui `bot.start` por uma função que lança, no
@@ -198,8 +206,8 @@ contar o motivo.
 | --- | --- |
 | `GET /health` | Estado do registro no Telegram, uptime e o último erro de entrega. |
 | `GET /stats` | Métricas do funil. Exige `x-admin-token` com o `TELEGRAM_WEBHOOK_SECRET` **configurado à mão**; com segredo derivado o endpoint fica desligado (`404`). |
-| `POST /telegram/<cauda-do-token>` | Webhook do Telegram. |
-| `POST /webhook` | Mesmo handler, para webhook apontado à mão. |
+| `POST /webhook` | Webhook do Telegram (a rota registrada no arranque). |
+| `POST /telegram/<cauda-do-token>` | Mesmo handler; caminho legado, ainda aceito. |
 
 ---
 
@@ -245,9 +253,10 @@ Start command:  npm start
 ```
 
 Configure as variáveis do `.env.example` no painel da plataforma. No Render
-não é preciso definir `TELEGRAM_MODE` nem `TELEGRAM_WEBHOOK_URL`: a URL
-pública vem de `RENDER_EXTERNAL_URL` e o modo webhook é escolhido a partir
-dela.
+basta `NODE_ENV=production`, `TELEGRAM_BOT_TOKEN` e `GEMINI_API_KEY`: a URL
+pública vem de `RENDER_EXTERNAL_URL` e o webhook é imposto a partir dela.
+**Não defina `TELEGRAM_MODE`** — em produção ele é ignorado quando pede
+polling, e a variável só serve para confundir o diagnóstico.
 
 A porta HTTP sobe antes de qualquer chamada ao Telegram. As plataformas
 derrubam o serviço que não liga a porta dentro de um prazo, e falar com o

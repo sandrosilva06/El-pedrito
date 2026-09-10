@@ -50,6 +50,11 @@ export interface SalesDirective {
    * nenhuma. E o que agenda o lembrete individual.
    */
   promisedTime: string;
+  /**
+   * Cantao que o lead indicou NESTA mensagem, ou "" se nao indicou nada.
+   * Serve para gravar, nunca para justificar repetir a pergunta.
+   */
+  canton: string;
   /** Se true, o link de afiliado deve aparecer na resposta. */
   includeLink: boolean;
   /** Fatos que valem guardar sobre o lead (memoria de longo prazo). */
@@ -81,6 +86,10 @@ const responseSchema: Schema = {
       type: Type.STRING,
       description: 'Hora HH:MM que o lead deu para tratar do deposito, ou vazio',
     },
+    canton: {
+      type: Type.STRING,
+      description: 'Cantao ou cidade da Suica que o lead indicou nesta mensagem, ou vazio',
+    },
     includeLink: { type: Type.BOOLEAN, description: 'Incluir o link de afiliado?' },
     notes: { type: Type.STRING, description: 'Fatos a memorizar sobre o lead' },
     shouldStop: { type: Type.BOOLEAN, description: 'O lead pediu para parar?' },
@@ -95,6 +104,7 @@ const responseSchema: Schema = {
     'tone',
     'profile',
     'promisedTime',
+    'canton',
     'includeLink',
     'notes',
     'shouldStop',
@@ -120,7 +130,7 @@ SEQUENCIA DE ABORDAGEM — a ordem importa mais do que o argumento:
 
 TURNOS 1-2 — RAPPORT E QUALIFICACAO
 - So conversa. Uma ou duas destas, nunca as tres de uma vez:
-  · em que cantao da Suica esta a morar
+  · em que cantao da Suica esta a morar (VER A REGRA DO CANTAO ABAIXO)
   · ha quanto tempo esta na Suica
   · se ja costuma apostar em futebol ou esta a comecar agora
 - Usa a resposta para criar proximidade de emigrante — quem esta longe de casa
@@ -166,6 +176,24 @@ A sequencia pode andar mais devagar, nunca mais depressa: se ao turno 4 o lead
 ainda esta a duvidar, trata a duvida e adia a condicao de entrada. O que nao
 pode e saltar etapas — vender antes de haver conversa e o erro que mata o
 funil.
+
+REGRA DO CANTAO — le o campo "cantao" do CONTEXTO DO LEAD:
+- Se tiver um valor: o lead JA DISSE onde mora. E ESTRITAMENTE PROIBIDO voltar
+  a perguntar, de qualquer forma, incluindo "e em que zona?" ou "onde e que
+  disseste que estavas?". Usa o que ja sabes para criar proximidade.
+- Se estiver "desconhecido" e for turno 1 ou 2: podes perguntar UMA vez.
+- Se estiver "desconhecido" e for turno 3 ou mais: o lead nao quis dizer.
+  Deixa estar e segue para a fase seguinte. Insistir num dado que ele evitou
+  transforma a conversa num interrogatorio.
+- Preenche o campo "canton" da diretriz APENAS quando ele indicar a
+  localizacao nesta mensagem. Nos outros turnos deixa vazio.
+
+CONTINUIDADE — o funil nao recomeca:
+- Se o lead ja disse o cantao e agora responde outra coisa qualquer ("es top",
+  "fixe", "ya"), isso NAO e razao para voltar a saudacoes nem a perguntas de
+  residencia. Avanca para o passo seguinte do funil.
+- Nunca repitas uma pergunta ja respondida no historico. Reler o historico
+  antes de perguntar seja o que for e obrigatorio.
 
 REGRA DE OURO DESTA FASE:
 - NAO divulgues o casino como produto, nem trates o registo como o objetivo.
@@ -329,6 +357,7 @@ function fallbackDirective(lead: Lead): SalesDirective {
     tone: 'informal, calmo, sem pressao',
     profile: 'indefinido',
     promisedTime: '',
+    canton: '',
     includeLink: false,
     notes: '',
     shouldStop: false,
@@ -351,6 +380,7 @@ export function buildPrompt(params: {
 - chat_id: ${lead.chatId}
 - nome: ${lead.firstName ?? 'desconhecido'}
 - estagio atual: ${lead.stage}
+- cantao: ${lead.canton ?? 'desconhecido'}
 - TURNO NUMERO: ${history.filter((m) => m.role === 'user').length + 1} (usa a SEQUENCIA DE ABORDAGEM)
 - anotacoes anteriores: ${lead.notes ?? '(nenhuma)'}
 
@@ -443,6 +473,7 @@ async function requestDirective(params: {
       promisedTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(parsed.promisedTime ?? ''))
         ? String(parsed.promisedTime)
         : '',
+      canton: text(parsed.canton, ''),
       includeLink: parsed.includeLink === true,
       notes: text(parsed.notes, ''),
       shouldStop: parsed.shouldStop === true,

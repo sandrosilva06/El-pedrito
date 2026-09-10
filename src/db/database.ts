@@ -50,6 +50,8 @@ export interface Lead {
   promisedAt: string | null;
   /** O que ele disse, para o lembrete nao soar generico. */
   promiseNote: string | null;
+  /** Cantao onde vive, assim que o disser. Null enquanto nao se souber. */
+  canton: string | null;
   firstName: string | null;
   username: string | null;
   languageCode: string | null;
@@ -116,6 +118,7 @@ interface LeadRow {
   chat_id: number;
   promised_at: string | null;
   promise_note: string | null;
+  canton: string | null;
   first_name: string | null;
   username: string | null;
   language_code: string | null;
@@ -210,6 +213,9 @@ addColumnIfMissing('leads', 'blocked', 'INTEGER NOT NULL DEFAULT 0');
 // Estado "promessa de deposito": instante UTC combinado com o lead.
 addColumnIfMissing('leads', 'promised_at', 'TEXT');
 addColumnIfMissing('leads', 'promise_note', 'TEXT');
+// Cantao onde o lead vive. Primeira classe, e nao dentro das notas, porque a
+// regra de nao voltar a perguntar precisa de o consultar deterministicamente.
+addColumnIfMissing('leads', 'canton', 'TEXT');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS remarketing_runs (
@@ -266,6 +272,7 @@ function mapLead(row: LeadRow): Lead {
     chatId: row.chat_id,
     promisedAt: row.promised_at,
     promiseNote: row.promise_note,
+    canton: row.canton,
     firstName: row.first_name,
     username: row.username,
     languageCode: row.language_code,
@@ -345,6 +352,10 @@ const statements = {
      WHERE chat_id = ?
   `),
   markBlocked: db.prepare("UPDATE leads SET blocked = 1 WHERE chat_id = ?"),
+  setCanton: db.prepare(`
+    UPDATE leads SET canton = ?, updated_at = datetime('now')
+     WHERE chat_id = ? AND (canton IS NULL OR canton = '')
+  `),
   setPromise: db.prepare(`
     UPDATE leads SET promised_at = ?, promise_note = ?, updated_at = datetime('now')
      WHERE chat_id = ?
@@ -647,6 +658,15 @@ export function clearDepositPromise(chatId: number): void {
  */
 export function getDuePromises(nowUtc: string, limit: number): Lead[] {
   return asRows<LeadRow>(statements.duePromises.all(nowUtc, limit)).map(mapLead);
+}
+
+/**
+ * Grava o cantao do lead. So escreve se ainda estiver vazio: a primeira
+ * resposta e a boa, e uma mencao de passagem a outra cidade mais a frente
+ * ("o meu primo esta em Genebra") nao pode mudar onde ele mora.
+ */
+export function setCanton(chatId: number, canton: string): void {
+  statements.setCanton.run(canton, chatId);
 }
 
 export function getStats(): FunnelStats {

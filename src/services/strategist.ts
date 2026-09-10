@@ -57,6 +57,11 @@ export interface SalesDirective {
    * onde nao quer.
    */
   affiliateHouse: string;
+  /**
+   * Cantao que o lead indicou NESTA mensagem, ou "" se nao indicou nada.
+   * Serve para gravar, nunca para justificar repetir a pergunta.
+   */
+  canton: string;
   /** Se true, o link de afiliado deve aparecer na resposta. */
   includeLink: boolean;
   /** Fatos que valem guardar sobre o lead (memoria de longo prazo). */
@@ -92,6 +97,10 @@ const responseSchema: Schema = {
       type: Type.STRING,
       description: 'Identificador da casa escolhida pelo lead, ou vazio',
     },
+    canton: {
+      type: Type.STRING,
+      description: 'Cantao ou cidade da Suica que o lead indicou nesta mensagem, ou vazio',
+    },
     includeLink: { type: Type.BOOLEAN, description: 'Incluir o link de afiliado?' },
     notes: { type: Type.STRING, description: 'Fatos a memorizar sobre o lead' },
     shouldStop: { type: Type.BOOLEAN, description: 'O lead pediu para parar?' },
@@ -107,6 +116,7 @@ const responseSchema: Schema = {
     'profile',
     'promisedTime',
     'affiliateHouse',
+    'canton',
     'includeLink',
     'notes',
     'shouldStop',
@@ -182,6 +192,7 @@ function fallbackDirective(lead: Lead): SalesDirective {
     profile: 'indefinido',
     promisedTime: '',
     affiliateHouse: '',
+    canton: '',
     includeLink: false,
     notes: '',
     shouldStop: false,
@@ -204,6 +215,7 @@ export function buildPrompt(params: {
 - chat_id: ${lead.chatId}
 - nome: ${lead.firstName ?? 'desconhecido'}
 - estagio atual: ${lead.stage}
+- cantao: ${lead.canton ?? 'desconhecido'}
 - TURNO NUMERO: ${history.filter((m) => m.role === 'user').length + 1} (usa a SEQUENCIA DE ABORDAGEM)
 - anotacoes anteriores: ${lead.notes ?? '(nenhuma)'}
 
@@ -297,6 +309,7 @@ async function requestDirective(params: {
         ? String(parsed.promisedTime)
         : '',
       affiliateHouse: text(parsed.affiliateHouse, ''),
+      canton: text(parsed.canton, ''),
       includeLink: parsed.includeLink === true,
       notes: text(parsed.notes, ''),
       shouldStop: parsed.shouldStop === true,

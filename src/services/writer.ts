@@ -131,8 +131,13 @@ function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number
   const phase = phaseRule(turn, directive.stage);
   const postponement = postponementRule(directive);
 
+  const cantonRule = lead.canton
+    ? `O lead vive em ${lead.canton}. JA TE DISSE ISTO: e PROIBIDO voltar a ` +
+      'perguntar onde mora, mesmo por outras palavras.'
+    : '';
+
   return `[DIRETRIZ INTERNA — NAO MOSTRES AO LEAD]
-${phase ? `${phase}\n` : ''}${postponement ? `${postponement}\n` : ''}Nome do lead: ${lead.firstName ?? 'desconhecido'}
+${phase ? `${phase}\n` : ''}${postponement ? `${postponement}\n` : ''}${cantonRule ? `${cantonRule}\n` : ''}Nome do lead: ${lead.firstName ?? 'desconhecido'}
 Estagio do funil: ${directive.stage}
 Perfil do lead: ${directive.profile} — ${PROFILE_GUIDANCE[directive.profile]}
 Intencao detetada: ${directive.intent}

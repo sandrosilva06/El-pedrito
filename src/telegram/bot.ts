@@ -10,6 +10,7 @@ import {
   clearDepositPromise,
   getStats,
   recordDepositProof,
+  setCanton,
   setDepositPromise,
   setNotes,
   upsertLead,
@@ -21,6 +22,7 @@ import { writeReply } from '../services/writer';
 import { createLogger } from '../utils/logger';
 import { persona } from '../personas';
 import { sanitiseDashes } from '../utils/text';
+import { detectCanton } from '../utils/canton';
 import { nextOccurrenceUtc } from '../utils/timezone';
 
 const log = createLogger('telegram');
@@ -265,6 +267,33 @@ bot.command('stats', async (ctx) => {
 // ---------------------------------------------------------------------------
 
 /**
+ * Grava o cantao assim que o lead o disser.
+ *
+ * Duas fontes: o que o estrategista extraiu e uma leitura em codigo da propria
+ * mensagem. A segunda existe porque a primeira falha de vez em quando, e o
+ * resultado dessa falha e o bot voltar a perguntar onde a pessoa mora — que e
+ * a queixa que motivou isto. A tabela nao falha.
+ *
+ * A escrita e ignorada se o lead ja tiver cantao: a primeira resposta e a boa.
+ */
+function recordCanton(
+  chatId: number,
+  known: string | null,
+  incoming: string,
+  directive: SalesDirective,
+): void {
+  if (known) return;
+
+  // A leitura em codigo tem prioridade: devolve o nome canonico do cantao,
+  // enquanto o modelo tanto pode devolver "Zurique" como "zurich" ou "ZH".
+  const detected = detectCanton(incoming) ?? detectCanton(directive.canton);
+  if (!detected) return;
+
+  setCanton(chatId, detected);
+  log.info(`cantao registado chat=${chatId} -> ${detected}`);
+}
+
+/**
  * Guarda a hora combinada com o lead, convertida do fuso dele para UTC. Uma
  * hora ja passada e do dia seguinte: quem diz "as 18h" as 19h esta a falar de
  * amanha, nao de ha uma hora.
@@ -353,6 +382,7 @@ async function runFunnelTurn(
 
       advanceStage(chatId, directive.shouldStop ? 'perdido' : directive.stage);
       recordPromise(chatId, directive);
+      recordCanton(chatId, current.canton, incoming, directive);
 
       if (directive.notes.trim().length > 0) {
         const merged = [current.notes, directive.notes.trim()]

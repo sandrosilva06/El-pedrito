@@ -30,6 +30,7 @@ async function main(): Promise<void> {
   const db = await import('../src/db/database');
   const { planStrategy } = await import('../src/services/strategist');
   const { writeReply, splitIntoBubbles } = await import('../src/services/writer');
+  const { detectCanton } = await import('../src/utils/canton');
   const { env } = await import('../src/config/env');
 
   async function turn(incoming: string): Promise<void> {
@@ -51,9 +52,18 @@ async function main(): Promise<void> {
     });
     db.advanceStage(CHAT_ID, directive.shouldStop ? 'perdido' : directive.stage);
 
+    // Espelha o que o bot faz em runFunnelTurn. Sem isto o harness nunca
+    // gravava o cantao e dava a impressao de que a persistencia estava
+    // partida quando o que faltava era o teste passar por aqui.
+    if (!lead.canton) {
+      const detected = detectCanton(incoming) ?? detectCanton(directive.canton);
+      if (detected) db.setCanton(CHAT_ID, detected);
+    }
+
     console.log(dim(`\n  ┌─ DIRETRIZ (estrategista, ${t1 - t0}ms)`));
     console.log(dim(`  │ estagio    ${directive.stage}   temp ${directive.temperature}/100`));
     console.log(dim(`  │ perfil     ${directive.profile}`));
+    console.log(dim(`  │ cantao     ${db.getLead(CHAT_ID)?.canton ?? '(desconhecido)'}`));
     console.log(dim(`  │ intencao   ${directive.intent}`));
     console.log(dim(`  │ objecao    ${directive.objection}`));
     console.log(dim(`  │ instrucao  ${directive.directive}`));

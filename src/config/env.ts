@@ -81,7 +81,7 @@ const schema = z
       (value) => value ?? 'portugueses emigrantes na Suica',
     ),
     /** Casa onde o lead faz registo e deposito para desbloquear o grupo. */
-    PLATFORM_NAME: optionalString.transform((value) => value ?? 'GangstaZino'),
+    PLATFORM_NAME: optionalString.transform((value) => value ?? 'GangstaSino'),
     AFFILIATE_LINK: optionalString.transform((value) => value ?? ''),
     MIN_DEPOSIT: optionalString.transform((value) => value ?? '20€'),
     /** Quantas entradas o grupo envia por dia. */

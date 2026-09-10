@@ -48,9 +48,10 @@ const schema = z
     TELEGRAM_MODE: z.enum(['polling', 'webhook']).optional(),
     TELEGRAM_WEBHOOK_URL: optionalString,
     TELEGRAM_WEBHOOK_SECRET: optionalString,
-    // O Render injeta a URL publica do servico automaticamente. Serve de
+    // O Render injeta a URL publica do servico automaticamente. Servem de
     // fallback para quem esquece de configurar TELEGRAM_WEBHOOK_URL.
     RENDER_EXTERNAL_URL: optionalString,
+    RENDER_EXTERNAL_HOSTNAME: optionalString,
 
     GEMINI_API_KEY: requiredString('GEMINI_API_KEY'),
     GEMINI_MODEL: optionalString.transform((value) => value ?? 'gemini-3.6-flash'),
@@ -98,6 +99,8 @@ export type Env = Omit<
   webhookPath: string;
   /** Alias fixo aceito junto da rota principal. */
   webhookAliasPath: string;
+  /** Se o modo veio de TELEGRAM_MODE ou foi deduzido da URL publica. */
+  modeSource: 'explicito' | 'automatico';
 };
 
 /**
@@ -148,9 +151,14 @@ function load(): Env {
   // pela internet deve receber webhook, nao ficar fazendo long polling —
   // em plataformas que hibernam por inatividade o polling morre no primeiro
   // spin-down e nunca mais acorda, porque nada volta a bater na porta.
-  const publicUrl =
-    normalizePublicUrl(value.TELEGRAM_WEBHOOK_URL) ??
-    normalizePublicUrl(value.RENDER_EXTERNAL_URL);
+  const renderUrl =
+    normalizePublicUrl(value.RENDER_EXTERNAL_URL) ??
+    // Alguns servicos do Render expoem so o hostname, sem o esquema.
+    (value.RENDER_EXTERNAL_HOSTNAME
+      ? normalizePublicUrl(`https://${value.RENDER_EXTERNAL_HOSTNAME}`)
+      : null);
+
+  const publicUrl = normalizePublicUrl(value.TELEGRAM_WEBHOOK_URL) ?? renderUrl;
 
   const mode = value.TELEGRAM_MODE ?? (publicUrl ? 'webhook' : 'polling');
 
@@ -182,6 +190,7 @@ function load(): Env {
     databaseFile,
     webhookPath: `/telegram/${tokenTail}`,
     webhookAliasPath: '/webhook',
+    modeSource: value.TELEGRAM_MODE ? 'explicito' : 'automatico',
   };
 }
 

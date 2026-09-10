@@ -154,7 +154,13 @@ A rota registrada no Telegram é derivada do token
 (`/telegram/<cauda-do-token>`), mas `/webhook` também é aceito — é o caminho
 que se digita ao apontar o webhook à mão, e um POST no caminho errado daria
 404 sem nenhuma pista. Ambos exigem o header
-`X-Telegram-Bot-Api-Secret-Token`; sem ele, `401`.
+`X-Telegram-Bot-Api-Secret-Token`; sem ele, `401`. Em modo polling as duas
+rotas respondem `409` explicando que aquele servidor não entrega updates.
+
+> **Ao mexer em `src/index.ts`:** o `webhookCallback()` da grammY não devolve
+> apenas um handler — ele substitui `bot.start` por uma função que lança, no
+> momento em que é criado. Construí-lo fora do modo webhook mata o long
+> polling antes de ele começar, e o erro só aparece no boot.
 
 ### Quando o bot não responde
 

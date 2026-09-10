@@ -21,6 +21,8 @@ app.disable('x-powered-by');
  */
 const telegram: {
   mode: string;
+  modeSource: string;
+  publicUrl: string | null;
   botUsername: string | null;
   webhookRegistered: boolean;
   pendingUpdates: number | null;
@@ -28,6 +30,8 @@ const telegram: {
   error: string | null;
 } = {
   mode: env.TELEGRAM_MODE,
+  modeSource: env.modeSource,
+  publicUrl: env.TELEGRAM_WEBHOOK_URL,
   botUsername: null,
   webhookRegistered: false,
   pendingUpdates: null,
@@ -59,19 +63,38 @@ app.get('/stats', (req, res) => {
   res.json(getStats());
 });
 
-// A rota fica registrada nos dois caminhos e independe do modo: o caminho
+// ATENCAO ao mexer aqui: webhookCallback() nao apenas devolve um handler —
+// ele substitui bot.start por uma funcao que lanca, no momento em que e
+// criado. Construi-lo em modo polling mata o long polling antes mesmo de
+// comecar. Por isso ele so e criado quando o modo e webhook.
+const webhookHandler =
+  env.TELEGRAM_MODE === 'webhook'
+    ? webhookCallback(bot, 'express', {
+        secretToken: env.TELEGRAM_WEBHOOK_SECRET,
+        timeoutMilliseconds: 60_000,
+      })
+    : null;
+
+// As rotas ficam registradas nos dois caminhos e nos dois modos: o caminho
 // derivado do token (o que a aplicacao registra no Telegram) e o /webhook
-// literal, que e o que se digita quando o webhook e apontado a mao. Um POST
-// no caminho errado responderia 404 sem nenhuma pista do porque. O header de
-// segredo protege os dois. O parser de JSON fica restrito a essas rotas: o
-// payload do Telegram e pequeno e nenhuma outra rota recebe corpo.
+// literal, que e o que se digita ao apontar o webhook a mao. Em polling elas
+// respondem explicando o motivo — um 404 mudo esconderia justamente a
+// configuracao errada que se esta tentando achar. O parser de JSON fica
+// restrito a essas rotas: nenhuma outra recebe corpo.
 app.post(
   [env.webhookPath, env.webhookAliasPath],
   express.json({ limit: '1mb' }),
-  webhookCallback(bot, 'express', {
-    secretToken: env.TELEGRAM_WEBHOOK_SECRET,
-    timeoutMilliseconds: 60_000,
-  }),
+  (req, res) => {
+    if (!webhookHandler) {
+      res.status(409).json({
+        error: 'o servidor esta em long polling; este webhook nao entrega updates',
+        hint: 'configure TELEGRAM_MODE=webhook, ou remova a variavel para o modo ser deduzido da URL publica',
+      });
+      return;
+    }
+
+    void webhookHandler(req, res);
+  },
 );
 
 app.use((_req, res) => {

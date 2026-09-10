@@ -127,6 +127,22 @@ aberto faria o Telegram dar a entrega por falhada e reenviar o update — o lead
 receberia a conversa em duplicado. A fila por chat continua a serializar, por
 isso a ordem mantém-se.
 
+### Pontuação
+
+O travessão a ligar orações ("é grátis — não pagas nada") é uma marca de texto
+de modelo: ninguém o escreve numa mensagem de telemóvel. Os prompts proíbem-no
+e `sanitiseDashes()` remove-o do que sai, trocando por vírgula.
+
+Corre em três sítios: no que o redator devolve (para não ficar gravado no
+histórico e o modelo o reaprender no turno seguinte), nas mensagens de
+remarketing, e uma última vez antes do envio — essa apanha texto que o modelo
+não escreveu, como o `COMPLIANCE_NOTE` ou o `TARGET_AUDIENCE` vindos do
+ambiente.
+
+Hífenes **dentro** de palavras não são tocados: `apitas-me`, `registares-te`,
+`fim-de-semana` são português correto. Só o hífen isolado entre espaços, no
+papel de travessão, é substituído. URLs ficam intactos.
+
 ### Objeções com resposta fixa
 
 | Objeção | Ângulo |

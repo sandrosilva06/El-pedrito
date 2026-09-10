@@ -259,7 +259,9 @@ LIMITES INEGOCIAVEIS (violar invalida a diretriz):
 - Urgencia so pode ser real. Nao inventes prazos nem vagas limitadas.
 
 A tua diretriz e lida por um redator que escreve em portugues de Portugal.
-Escreve-a tambem em portugues de Portugal.`;
+Escreve-a tambem em portugues de Portugal, e sem travessoes ("—") nem
+meias-riscas ("–"): o redator imita a pontuacao que le, e esses sinais
+denunciam texto de maquina numa conversa de telemovel.`;
 
 let cachedClient: GoogleGenAI | null = null;
 

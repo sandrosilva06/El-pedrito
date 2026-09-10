@@ -19,6 +19,7 @@ import { planStrategy, type SalesDirective } from '../services/strategist';
 import { splitIntoBubbles } from '../services/writer';
 import { writeReply } from '../services/writer';
 import { createLogger } from '../utils/logger';
+import { sanitiseDashes } from '../utils/text';
 import { nextOccurrenceUtc } from '../utils/timezone';
 
 const log = createLogger('telegram');
@@ -151,7 +152,10 @@ async function typeFor(ctx: Context, totalMs: number): Promise<void> {
  * qualquer erro de portugues — ninguem escreve quatro frases num instante.
  */
 async function sendHumanPaced(ctx: Context, text: string): Promise<void> {
-  const bubbles = splitIntoBubbles(text, env.MAX_BUBBLES);
+  // Ultima barreira antes do Telegram. O redator ja limpa o que gera, mas por
+  // aqui passa tambem texto que ele nao escreveu — o aviso legal, o link e as
+  // mensagens fixas vindas do ambiente.
+  const bubbles = splitIntoBubbles(sanitiseDashes(text), env.MAX_BUBBLES);
 
   for (const [index, bubble] of bubbles.entries()) {
     await typeFor(ctx, randomBetween(env.TYPING_MS_MIN, env.TYPING_MS_MAX));

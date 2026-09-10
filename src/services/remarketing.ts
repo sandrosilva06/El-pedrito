@@ -3,6 +3,7 @@ import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { env } from '../config/env';
 import type { RemarketingAudience } from '../db/database';
 import { createLogger } from '../utils/logger';
+import { sanitiseDashes } from '../utils/text';
 import { withRetry } from './retry';
 
 const log = createLogger('remarketing');
@@ -30,7 +31,7 @@ const FALLBACK_SCRIPTS: Record<RemarketingAudience, string[]> = {
   vip: [
     'Boas companheiro! Ja foste dar uma olhadela as entradas que mandei hoje no VIP? Nao deixes passar os greens!',
     '{nome}, mandei as entradas do dia no grupo. Da la um salto antes que os jogos comecem.',
-    'Tudo bem {nome}? Passa pelo VIP para veres o que ja saiu hoje — nao quero que percas nenhuma.',
+    'Tudo bem {nome}? Passa pelo VIP para veres o que ja saiu hoje, nao quero que percas nenhuma.',
   ],
   promessa: [
     'Boas malandro, ja saiste do trabalho? As apostas da noite saem daqui a bocado no VIP, estas pronto para abrires a conta e entrares?',
@@ -102,7 +103,7 @@ export async function generateRemarketingMessage(
         },
       });
 
-      return (response.text ?? '').trim();
+      return sanitiseDashes(response.text ?? '');
     },
   });
 

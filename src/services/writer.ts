@@ -3,6 +3,7 @@ import { GoogleGenAI, ThinkingLevel, type Content } from '@google/genai';
 import { env } from '../config/env';
 import type { Lead, StoredMessage } from '../db/database';
 import { createLogger } from '../utils/logger';
+import { sanitiseDashes } from '../utils/text';
 import { withRetry } from './retry';
 import type { LeadProfile, SalesDirective } from './strategist';
 
@@ -65,6 +66,15 @@ COMO ESCREVES — EM MENSAGENS SEPARADAS:
 - Trata SEMPRE o lead pelo nome quando o souberes.
 - Sem markdown, sem titulos, sem bullets, sem assinatura, sem emoji a mais
   (no maximo um, e so quando encaixa).
+- PROIBIDO o travessao ("—") e a meia-risca ("–") a ligar ideias, e proibido o
+  hifen solto entre espacos no mesmo papel. Ninguem escreve assim no
+  telemovel: e a marca mais obvia de texto de maquina. Usa virgula, ponto,
+  reticencias, ou parte em duas mensagens.
+    ERRADO: "E gratis — nao pagas nada."
+    CERTO:  "E gratis, nao pagas nada."
+    CERTO:  "E gratis. Nao pagas nada a mim."
+  Hifens dentro de palavras mantem-se, que isso e portugues: "apitas-me",
+  "registares-te", "fim-de-semana".
 - Nada de linguagem corporativa ("caro cliente", "estamos ao dispor").
 
 O QUE ESTAS A OFERECER:
@@ -423,7 +433,10 @@ export async function writeReply(params: {
         finishReason: result.candidates?.[0]?.finishReason,
       });
 
-      return (result.text ?? '').trim();
+      // Limpa aqui, e nao so no envio: a resposta tambem vai para o
+      // historico, e um travessao gravado ensina o modelo a repeti-lo no
+      // turno seguinte.
+      return sanitiseDashes(result.text ?? '');
     },
   });
 

@@ -14,7 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "chat": "tsx scripts/chat.ts",
     "models": "tsx scripts/models.ts",
-    "notify-ftd": "tsx scripts/notify-ftd.ts"
+    "notify": "tsx scripts/notify.ts"
   },
   "dependencies": {
     "@google/genai": "^2.21.0",

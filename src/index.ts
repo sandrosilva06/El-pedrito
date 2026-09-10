@@ -5,6 +5,7 @@ import { webhookCallback } from 'grammy';
 
 import { env, isProduction } from './config/env';
 import { closeDatabase, getStats } from './db/database';
+import { startRemarketingScheduler, stopRemarketingScheduler } from './scheduler/remarketing';
 import { BOT_COMMANDS, bot } from './telegram/bot';
 import { createLogger } from './utils/logger';
 
@@ -146,6 +147,9 @@ async function start(): Promise<void> {
     } else {
       await startPolling();
     }
+
+    // So depois de o bot estar ligado: o agendador envia pela API do Telegram.
+    startRemarketingScheduler();
   } catch (error) {
     // O processo continua de pe: o /health passa a responder "degraded" com o
     // motivo, o que e mais diagnosticavel do que um container reiniciando.
@@ -215,6 +219,8 @@ async function shutdown(signal: string): Promise<void> {
   timeout.unref();
 
   try {
+    stopRemarketingScheduler();
+
     if (env.TELEGRAM_MODE === 'polling') {
       await bot.stop();
     }

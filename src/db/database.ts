@@ -95,6 +95,9 @@ export interface DepositProof {
   createdAt: string;
 }
 
+/** Publicos do remarketing: quem ainda nao depositou, e quem ja esta no VIP. */
+export type RemarketingAudience = 'nao_convertido' | 'vip';
+
 export interface FunnelStats {
   totalLeads: number;
   totalMessages: number;
@@ -178,6 +181,34 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_proofs_status ON deposit_proofs (status, id DESC);
   CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages (chat_id, id DESC);
   CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads (stage);
+`);
+
+/**
+ * O SQLite nao tem ADD COLUMN IF NOT EXISTS, e um deploy sobre uma base ja
+ * existente teria de a apagar para ganhar colunas novas — com o historico dos
+ * leads dentro. Daí a migracao a mao.
+ */
+function addColumnIfMissing(table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (columns.some((entry) => entry.name === column)) return;
+
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  log.info(`migracao: ${table}.${column} adicionada`);
+}
+
+addColumnIfMissing('leads', 'last_remarketing_at', 'TEXT');
+addColumnIfMissing('leads', 'remarketing_touches', 'INTEGER NOT NULL DEFAULT 0');
+addColumnIfMissing('leads', 'blocked', 'INTEGER NOT NULL DEFAULT 0');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS remarketing_runs (
+    slot       TEXT NOT NULL,
+    run_date   TEXT NOT NULL,
+    audience   TEXT NOT NULL,
+    sent       INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (slot, run_date, audience)
+  );
 `);
 
 log.info(`SQLite pronto em ${env.databaseFile}`);
@@ -288,6 +319,37 @@ const statements = {
     "SELECT COUNT(*) AS total FROM deposit_proofs WHERE status = 'pendente'",
   ),
   deleteProofs: db.prepare('DELETE FROM deposit_proofs WHERE chat_id = ?'),
+  claimSlot: db.prepare(`
+    INSERT OR IGNORE INTO remarketing_runs (slot, run_date, audience) VALUES (?, ?, ?)
+  `),
+  recordSlotSent: db.prepare(`
+    UPDATE remarketing_runs SET sent = ? WHERE slot = ? AND run_date = ? AND audience = ?
+  `),
+  markRemarketed: db.prepare(`
+    UPDATE leads
+       SET last_remarketing_at = datetime('now'),
+           remarketing_touches = remarketing_touches + 1
+     WHERE chat_id = ?
+  `),
+  markBlocked: db.prepare("UPDATE leads SET blocked = 1 WHERE chat_id = ?"),
+  targetsNotConverted: db.prepare(`
+    SELECT * FROM leads
+     WHERE blocked = 0
+       AND stage NOT IN ('perdido', ${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
+       AND remarketing_touches < ?
+       AND updated_at <= datetime('now', ?)
+       AND (last_remarketing_at IS NULL OR last_remarketing_at <= datetime('now', ?))
+     ORDER BY updated_at ASC
+     LIMIT ?
+  `),
+  targetsVip: db.prepare(`
+    SELECT * FROM leads
+     WHERE blocked = 0
+       AND stage IN (${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
+       AND (last_remarketing_at IS NULL OR last_remarketing_at <= datetime('now', ?))
+     ORDER BY updated_at ASC
+     LIMIT ?
+  `),
   convertedDirectives: db.prepare(`
     SELECT m.directive AS directive
       FROM messages m
@@ -475,6 +537,61 @@ export function forgetLead(chatId: number): void {
     statements.deleteMessages.run(chatId);
     statements.deleteLead.run(chatId);
   });
+}
+
+/**
+ * Reserva o envio de um slot para hoje. Devolve false se ja tinha sido
+ * reservado: o Render reinicia o servico com frequencia, e sem esta marca na
+ * base de dados cada reinicio dentro da janela reenviaria tudo outra vez.
+ */
+export function claimRemarketingSlot(
+  slot: string,
+  runDate: string,
+  audience: RemarketingAudience,
+): boolean {
+  return statements.claimSlot.run(slot, runDate, audience).changes > 0;
+}
+
+export function recordRemarketingSent(
+  slot: string,
+  runDate: string,
+  audience: RemarketingAudience,
+  sent: number,
+): void {
+  statements.recordSlotSent.run(sent, slot, runDate, audience);
+}
+
+/**
+ * Leads a contactar. Fora ficam: quem bloqueou o bot, quem esta em 'perdido'
+ * (inclui quem pediu para parar e quem mencionou divida ou vicio), quem ja
+ * levou o numero maximo de lembretes, e quem falou connosco ha pouco — a esse
+ * nao se manda um lembrete, responde-se.
+ */
+export function getRemarketingTargets(params: {
+  audience: RemarketingAudience;
+  maxTouches: number;
+  quietHours: number;
+  limit: number;
+}): Lead[] {
+  const quiet = `-${params.quietHours} hours`;
+
+  const rows =
+    params.audience === 'vip'
+      ? asRows<LeadRow>(statements.targetsVip.all(quiet, params.limit))
+      : asRows<LeadRow>(
+          statements.targetsNotConverted.all(params.maxTouches, quiet, quiet, params.limit),
+        );
+
+  return rows.map(mapLead);
+}
+
+export function markRemarketed(chatId: number): void {
+  statements.markRemarketed.run(chatId);
+}
+
+/** O lead bloqueou o bot: nunca mais lhe mandamos nada. */
+export function markBlocked(chatId: number): void {
+  statements.markBlocked.run(chatId);
 }
 
 export function getStats(): FunnelStats {

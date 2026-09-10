@@ -67,6 +67,11 @@ ${env.HIT_RATE_CLAIM ? `  · ${env.HIT_RATE_CLAIM}` : '  · (sem marco de assert
 ${env.PAYOUT_CLAIM ? `  · ${env.PAYOUT_CLAIM}` : '  · (sem valor de levantamentos configurado: nao cites montantes)'}
   Estes numeros so entram DEPOIS de haver conversa — nunca na primeira
   mensagem, e nunca como abertura.
+- Confianca na plataforma, quando o lead duvidar: ${env.PLATFORM_TRUST_CLAIM}.
+- Quando entregares o link: o minimo e ${env.MIN_DEPOSIT}, mas para acompanhar
+  todas as entradas do dia sem esgotar a banca o ideal e comecar com
+  ${env.SUGGESTED_DEPOSIT}. E um conselho teu, nao um requisito — deixa claro
+  que com ${env.MIN_DEPOSIT} tambem entra.
 - Link: ${env.AFFILIATE_LINK || '(nao configurado — nao menciones link nenhum)'}
 
 O QUE NUNCA FAZES:
@@ -137,16 +142,44 @@ export function phaseRule(turn: number, stage: SalesDirective['stage']): string 
     );
   }
 
+  if (early && turn === 4) {
+    return (
+      'FASE — CONDICAO E PRONTIDAO: explica que entrar e gratuito e o que e ' +
+      'preciso, e TERMINA a perguntar se ele esta pronto para abrir a conta e ' +
+      'garantir a vaga no VIP. NAO mandes o link nesta mensagem.'
+    );
+  }
+
   return '';
 }
 
+/**
+ * O link so sai depois de o lead dizer que sim. A pergunta de prontidao e
+ * feita no turno 4, portanto a confirmacao chega no 5 ou depois — e ate la o
+ * link fica travado em codigo, mesmo que a diretriz peca o contrario.
+ *
+ * Mandar o link cedo de mais custa o lead duas vezes: perde-se o
+ * micro-compromisso que faz a pessoa avancar, e a conversa passa a parecer o
+ * spam de casino que toda a gente ja recebeu.
+ */
+export function linkAllowed(turn: number, stage: SalesDirective['stage']): boolean {
+  const early = stage === 'novo' || stage === 'qualificacao';
+  return !early || turn >= 5;
+}
+
 function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number): string {
+  const sendLink = directive.includeLink && linkAllowed(turn, directive.stage);
+
   const linkRule =
-    directive.includeLink && env.AFFILIATE_LINK
-      ? `Inclui o link de registo exatamente assim: ${env.AFFILIATE_LINK}`
+    sendLink && env.AFFILIATE_LINK
+      ? `Inclui o link de registo exatamente assim: ${env.AFFILIATE_LINK}\n` +
+        `Diz tambem: o deposito minimo e ${env.MIN_DEPOSIT}; para acompanhar todas as ` +
+        `entradas do dia sem esgotar a banca o ideal e comecar com ${env.SUGGESTED_DEPOSIT} ` +
+        `(conselho teu, nao requisito); e que basta mandares o print do deposito para ` +
+        'teres acesso imediato ao VIP.'
       : 'NAO incluas nenhum link nesta mensagem.';
 
-  const complianceRule = directive.includeLink
+  const complianceRule = sendLink
     ? `Ao mandar o link, fecha a mensagem com este aviso, em linha separada: "${env.COMPLIANCE_NOTE}"`
     : 'Nao e preciso repetir o aviso legal nesta mensagem.';
 

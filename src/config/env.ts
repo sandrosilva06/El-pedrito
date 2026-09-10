@@ -112,12 +112,42 @@ const schema = z
     PAYOUT_CLAIM: optionalString.transform(
       (value) => value ?? 'a malta ja levantou mais de 300.000€ da plataforma',
     ),
+    /**
+     * Argumentos sobre a plataforma usados para tratar a objecao de confianca.
+     * Ficam em variavel pela mesma razao dos numeros de resultados: sao
+     * afirmacoes de facto repetidas ao lead antes de ele depositar.
+     */
+    PLATFORM_TRUST_CLAIM: optionalString.transform(
+      (value) =>
+        value ??
+        'e das melhores a operar na Suica, com odds fortes e levantamentos rapidos',
+    ),
+    /** Valor sugerido como ideal para acompanhar as entradas do dia. */
+    SUGGESTED_DEPOSIT: optionalString.transform((value) => value ?? '50€'),
+
     MIN_AGE: intFromString(18, 0, 99),
     COMPLIANCE_NOTE: optionalString.transform(
       (value) =>
         value ??
         'Conteudo para maiores de 18 anos. Aposta apenas o que podes perder.',
     ),
+
+    // --- Remarketing -------------------------------------------------------
+    /** Liga/desliga o envio automatico. */
+    REMARKETING_ENABLED: optionalString.transform((value) => value !== 'false'),
+    /** Horarios dos envios, hora local do fuso abaixo. */
+    REMARKETING_SLOTS: optionalString.transform((value) => value ?? '09:30,14:30,20:30'),
+    /** Fuso dos leads. A Suica, nao o servidor. */
+    REMARKETING_TIMEZONE: optionalString.transform((value) => value ?? 'Europe/Zurich'),
+    /**
+     * Quantas mensagens de remarketing um lead que nao converteu recebe, no
+     * total, antes de o bot se calar. Sem tecto, o lead que nao respondeu ao
+     * decimo lembrete tambem nao responde ao centesimo — so bloqueia o bot, e
+     * bloqueios em massa fazem o Telegram limitar a conta.
+     */
+    REMARKETING_MAX_TOUCHES: intFromString(9, 1, 1000),
+    /** Horas minimas entre a ultima atividade do lead e um lembrete. */
+    REMARKETING_QUIET_HOURS: intFromString(20, 1, 720),
 
     RATE_LIMIT_MAX: intFromString(12, 1, 1000),
     RATE_LIMIT_WINDOW_SECONDS: intFromString(60, 1, 3600),

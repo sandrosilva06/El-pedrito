@@ -84,10 +84,25 @@ A ordem importa mais do que o argumento, e é imposta em dois sítios:
 
 | Turno | Conteúdo | Proibido |
 | --- | --- | --- |
-| 1-2 | Rapport: nome, cantão, há quanto tempo na Suíça | Registo, depósito, link, valores, nome da plataforma |
-| 3 | Comunidade e resultados do grupo | Condição de entrada, link |
-| 4+ | Condição de entrada: gratuita, conta na plataforma, depósito mínimo | — |
-| Depois | Pedido do print para libertar o acesso | Aprovar sem validação humana |
+| 1-2 | Rapport: cantão, há quanto tempo na Suíça, se já aposta | Registo, depósito, link, valores, nome da plataforma |
+| 3 | Comunidade, resultados e confiança na plataforma | Condição de entrada, link |
+| 4 | Condição de entrada **+ pergunta de prontidão** | O link — ainda não |
+| 5+ | Link, depósito mínimo, ancoragem e pedido do print | — |
+| Depois | Validação humana do print | Aprovar automaticamente |
+
+O link é a única coisa que exige um "sim" explícito antes de sair. A pergunta
+de prontidão no turno 4 é o micro-compromisso; a confirmação chega no 5. Até
+lá `linkAllowed()` trava-o **em código**, mesmo que a diretriz peça o
+contrário — mandar o link cedo custa o lead duas vezes: perde-se o
+compromisso, e a conversa passa a parecer o spam de casino que toda a gente já
+recebeu.
+
+### Objeções com resposta fixa
+
+| Objeção | Ângulo |
+| --- | --- |
+| "Tenho de pagar alguma coisa?" | Nada a mim, grupo gratuito, sem mensalidades. O depósito é saldo dele. Fecha a perguntar se ficou esclarecido. **Sem link.** |
+| "Já tenho conta noutra casa" | Motivo técnico: as entradas são dadas e conferidas nesta. Nunca difamar as outras casas. |
 
 O estrategista recebe o número do turno e a sequência no prompt. Mas a
 interdição das fases iniciais é **determinística**, calculada em
@@ -353,6 +368,30 @@ persistência por um banco gerenciado. O esquema está isolado em
 `node:sqlite` ainda é marcado como experimental no Node 22 (ele emite um aviso
 no boot) e estável no Node 24. A API usada aqui — `DatabaseSync`, `prepare`,
 `run`/`get`/`all`, `exec` — não mudou entre as duas versões.
+
+## Remarketing automático
+
+Três envios por dia (`REMARKETING_SLOTS`, no fuso dos leads), a dois públicos:
+
+- **Não convertidos** — quem falou e não avançou. Tom de escassez, a reabrir a
+  conversa. Sem link e sem repetir condições de entrada.
+- **VIP** — quem já depositou. Retenção: puxa-os de volta ao grupo para verem
+  as entradas do dia. Sem vendas; já compraram.
+
+Uma chamada ao modelo por slot e por público, personalizada depois com o nome
+de cada lead. Gerar por lead multiplicaria as chamadas pelo tamanho da base e
+esgotaria a quota a meio da lista. Sem modelo disponível há guiões de reserva
+— uma campanha que falha em silêncio parece estar a funcionar.
+
+**A marca de slot vive na base de dados.** O Render reinicia o serviço a toda
+a hora, e sem isso cada reinício dentro da janela reenviaria a campanha
+inteira ao mesmo lead.
+
+Ficam sempre de fora: quem está em `perdido` (inclui quem pediu para parar e
+quem mencionou dívida ou vício), quem bloqueou o bot, quem falou connosco nas
+últimas `REMARKETING_QUIET_HOURS`, e quem já recebeu
+`REMARKETING_MAX_TOUCHES` lembretes. Um `403` do Telegram marca o lead como
+bloqueado e ele nunca mais é contactado.
 
 ## Custo e limites do plano gratuito
 

@@ -12,9 +12,9 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "chat": "tsx scripts/chat.ts",
-    "models": "tsx scripts/models.ts",
-    "notify": "tsx scripts/notify.ts"
+    "chat": "tsx src/scripts/chat.ts",
+    "models": "tsx src/scripts/models.ts",
+    "notify": "tsx src/scripts/notify.ts"
   },
   "dependencies": {
     "@google/genai": "^2.21.0",

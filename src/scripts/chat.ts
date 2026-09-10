@@ -27,11 +27,11 @@ const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 
 async function main(): Promise<void> {
-  const db = await import('../src/db/database');
-  const { planStrategy } = await import('../src/services/strategist');
-  const { writeReply, splitIntoBubbles } = await import('../src/services/writer');
-  const { detectCanton } = await import('../src/utils/canton');
-  const { env } = await import('../src/config/env');
+  const db = await import('../db/database');
+  const { planStrategy } = await import('../services/strategist');
+  const { writeReply, splitIntoBubbles } = await import('../services/writer');
+  const { detectCanton } = await import('../utils/canton');
+  const { env } = await import('../config/env');
 
   async function turn(incoming: string): Promise<void> {
     const history = db.getRecentMessages(CHAT_ID);

@@ -1,9 +1,14 @@
 /**
  * Envios pontuais a listas fixas de leads.
  *
- *   npx tsx scripts/notify.ts                          # lista as campanhas
- *   npx tsx scripts/notify.ts vip-link --dry-run       # mostra sem enviar
- *   npx tsx scripts/notify.ts vip-link                 # envia
+ *   npm run notify                       # lista as campanhas
+ *   npm run notify vip-link -- --dry-run  # mostra sem enviar
+ *   npm run notify vip-link               # envia
+ *
+ * Em producao, onde o build ja correu, dispensa o tsx:
+ *
+ *   node dist/scripts/notify.js vip-link --dry-run
+ *   node dist/scripts/notify.js vip-link
  *
  * Cada campanha e enviada uma vez so por destinatario: os envios ficam num
  * recibo em disco, com a campanha na chave. Correr o script duas vezes por
@@ -113,7 +118,8 @@ function listCampaigns(): void {
     console.log(`  ${campaign.id.padEnd(16)} ${campaign.description}`);
     console.log(`  ${''.padEnd(16)} ${campaign.targets.length} destinatario(s)\n`);
   }
-  console.log('Uso: npx tsx scripts/notify.ts <campanha> [--dry-run]');
+  console.log('Uso: npm run notify <campanha> [-- --dry-run]');
+  console.log('     node dist/scripts/notify.js <campanha> [--dry-run]');
 }
 
 async function main(): Promise<void> {

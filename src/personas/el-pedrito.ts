@@ -321,6 +321,7 @@ export const elPedrito: Persona = {
 
   houses: [],
   defaultLink: env.AFFILIATE_LINK,
+  maxBubbleChars: 200,
 
   remarketing: {
     briefs: {

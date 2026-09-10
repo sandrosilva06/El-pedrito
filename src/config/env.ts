@@ -138,6 +138,14 @@ const schema = z
      * o Ivan nao fala de carros nem de casas.
      */
     IVAN_LIFESTYLE_CLAIM: optionalString.transform((value) => value ?? ''),
+    /**
+     * Historia de origem do Ivan. Mesma regra do lifestyle: e uma afirmacao
+     * sobre a vida dele, contada ao lead para criar identificacao antes de o
+     * fazer depositar. Vazia, ele nao conta historia nenhuma.
+     */
+    IVAN_STORY_CLAIM: optionalString.transform((value) => value ?? ''),
+    /** Banca aconselhada (nao exigida) para aguentar o dia. */
+    IVAN_SUGGESTED_DEPOSIT: optionalString.transform((value) => value ?? '50€'),
     /** Casas do Ivan. A Plan Bet e a principal. */
     PLANBET_LINK: optionalString.transform((value) => value ?? ''),
     CASINO22_LINK: optionalString.transform((value) => value ?? ''),

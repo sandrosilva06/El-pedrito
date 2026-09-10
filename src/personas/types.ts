@@ -42,6 +42,14 @@ export interface Persona {
   /** Link usado quando a diretriz nao escolheu casa nenhuma. */
   defaultLink: string;
 
+  /**
+   * Comprimento acima do qual uma mensagem ainda e comprida de mais para esta
+   * persona e vale a pena parti-la por frases. Registos diferentes toleram
+   * comprimentos diferentes: o Ivan escreve aos gritos curtos, o El Pedrito
+   * em frases inteiras.
+   */
+  maxBubbleChars: number;
+
   remarketing: {
     briefs: Record<RemarketingAudience, string>;
     fallbacks: Record<RemarketingAudience, string[]>;

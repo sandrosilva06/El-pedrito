@@ -176,8 +176,7 @@ function toGeminiContents(history: StoredMessage[]): Content[] {
   return contents;
 }
 
-/** Acima disto, um bloco ainda parece um testamento e vale a pena parti-lo. */
-const LONG_BUBBLE_CHARS = 200;
+
 
 /**
  * Parte um texto em frases sem partir URLs. O link de afiliado tem pontos
@@ -200,6 +199,45 @@ function splitSentences(text: string): string[] {
     .filter((part) => part.length > 0);
 }
 
+/** Abaixo disto, um fragmento nao e uma mensagem: e um restinho. */
+const MIN_BUBBLE_CHARS = 25;
+
+/**
+ * Cola fragmentos curtos de mais a mensagem vizinha.
+ *
+ * Ao partir por frases, a pontuacao final costuma deixar orfaos: um emoji
+ * sozinho, um "Ya." solto. Entregues como mensagem propria, denunciam o bot
+ * mais do que o testamento que se estava a evitar — ninguem manda uma
+ * mensagem so com um emoji a meio de uma explicacao.
+ *
+ * So se aplica DENTRO de um bloco que este codigo partiu. Uma linha em branco
+ * escrita pelo redator e uma separacao deliberada: tres mensagens curtas
+ * seguidas sao uma escolha dele, nao um acidente, e coladas destruiriam o
+ * fracionamento que se pediu.
+ */
+function mergeOrphans(blocks: string[]): string[] {
+  const result: string[] = [];
+
+  for (const block of blocks) {
+    const previous = result[result.length - 1];
+
+    if (block.length < MIN_BUBBLE_CHARS && previous) {
+      result[result.length - 1] = `${previous} ${block}`;
+      continue;
+    }
+
+    result.push(block);
+  }
+
+  // Um primeiro bloco curto nao tinha vizinho anterior; junta-se ao seguinte.
+  if (result.length > 1 && (result[0]?.length ?? 0) < MIN_BUBBLE_CHARS) {
+    const [first, second, ...rest] = result;
+    return [`${first} ${second}`, ...rest];
+  }
+
+  return result;
+}
+
 /**
  * Converte a resposta do redator nas mensagens que o lead vai receber.
  *
@@ -208,7 +246,11 @@ function splitSentences(text: string): string[] {
  * resultar num testamento, por isso os blocos compridos sao partidos por
  * frases — a instrucao de prompt e uma preferencia, esta funcao e a garantia.
  */
-export function splitIntoBubbles(text: string, maxBubbles: number): string[] {
+export function splitIntoBubbles(
+  text: string,
+  maxBubbles: number,
+  maxChars: number = persona.maxBubbleChars,
+): string[] {
   const blocks = text
     .split(/\n\s*\n/)
     .map((block) => block.trim())
@@ -217,12 +259,13 @@ export function splitIntoBubbles(text: string, maxBubbles: number): string[] {
   const expanded: string[] = [];
 
   for (const block of blocks) {
-    if (block.length <= LONG_BUBBLE_CHARS) {
+    if (block.length <= maxChars) {
       expanded.push(block);
       continue;
     }
 
     const sentences = splitSentences(block);
+    const pieces: string[] = [];
     let buffer = '';
 
     for (const sentence of sentences) {
@@ -230,24 +273,29 @@ export function splitIntoBubbles(text: string, maxBubbles: number): string[] {
       // parece alguem a escrever, parece uma falha.
       const candidate = buffer ? `${buffer} ${sentence}` : sentence;
 
-      if (candidate.length > LONG_BUBBLE_CHARS && buffer) {
-        expanded.push(buffer);
+      if (candidate.length > maxChars && buffer) {
+        pieces.push(buffer);
         buffer = sentence;
       } else {
         buffer = candidate;
       }
     }
 
-    if (buffer) expanded.push(buffer);
+    if (buffer) pieces.push(buffer);
+
+    // Orfaos so entre os pedacos deste bloco, nunca entre blocos.
+    expanded.push(...mergeOrphans(pieces));
   }
 
-  if (expanded.length === 0) return [text.trim()].filter((part) => part.length > 0);
-  if (expanded.length <= maxBubbles) return expanded;
+  const merged = expanded;
+
+  if (merged.length === 0) return [text.trim()].filter((part) => part.length > 0);
+  if (merged.length <= maxBubbles) return merged;
 
   // Excedentes vao para a ultima: cortar perderia texto, e o aviso legal e a
   // pergunta final costumam ser as ultimas linhas.
-  const kept = expanded.slice(0, maxBubbles - 1);
-  kept.push(expanded.slice(maxBubbles - 1).join('\n\n'));
+  const kept = merged.slice(0, maxBubbles - 1);
+  kept.push(merged.slice(maxBubbles - 1).join('\n\n'));
   return kept;
 }
 

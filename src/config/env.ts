@@ -73,7 +73,7 @@ const schema = z
     DATABASE_PATH: optionalString.transform((value) => value ?? './data/funnel.sqlite'),
     HISTORY_WINDOW: intFromString(20, 2, 100),
 
-    AGENT_NAME: optionalString.transform((value) => value ?? 'Pedrito'),
+    AGENT_NAME: optionalString.transform((value) => value ?? 'El Pedrito'),
     /** Grupo VIP que o funil promove — o produto desta fase. */
     GROUP_NAME: optionalString.transform((value) => value ?? 'El Pedrito Tips'),
     /** Publico a que o grupo se dirige, citado como posicionamento. */

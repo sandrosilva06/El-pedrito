@@ -65,6 +65,24 @@ export interface StoredMessage {
   createdAt: string;
 }
 
+/**
+ * Estagios que contam como conversao para efeitos de aprendizagem: o lead
+ * chegou ao deposito. Antes disso nao ha prova de que a abordagem resultou.
+ */
+export const CONVERTED_STAGES: readonly FunnelStage[] = [
+  'deposito_enviado',
+  'comprovativo_recebido',
+  'acesso_liberado',
+];
+
+/** Uma abordagem que ja levou um lead ate ao deposito. */
+export interface PlaybookEntry {
+  profile: string;
+  objection: string;
+  directive: string;
+  cta: string;
+}
+
 /** Comprovativo de deposito enviado pelo lead, a espera de validacao humana. */
 export interface DepositProof {
   id: number;
@@ -270,7 +288,73 @@ const statements = {
     "SELECT COUNT(*) AS total FROM deposit_proofs WHERE status = 'pendente'",
   ),
   deleteProofs: db.prepare('DELETE FROM deposit_proofs WHERE chat_id = ?'),
+  convertedDirectives: db.prepare(`
+    SELECT m.directive AS directive
+      FROM messages m
+      JOIN leads l ON l.chat_id = m.chat_id
+     WHERE l.stage IN (${CONVERTED_STAGES.map(() => '?').join(', ')})
+       AND m.role = 'assistant'
+       AND m.directive IS NOT NULL
+       AND m.chat_id <> ?
+     ORDER BY m.id DESC
+     LIMIT ?
+  `),
 };
+
+/**
+ * Abordagens que ja levaram leads ate ao deposito, para o estrategista as
+ * reaproveitar. Le as diretrizes gravadas nas conversas convertidas — e por
+ * isso que cada resposta guarda o JSON da diretriz que a gerou.
+ *
+ * Fica deduplicado por objecao: dez diretrizes a responder a mesma duvida
+ * ensinam o mesmo e so gastam contexto. O proprio lead e excluido, para o
+ * estrategista nao aprender com aquilo que acabou de dizer.
+ */
+export function getConversionPlaybook(params: {
+  excludeChatId: number;
+  limit?: number;
+}): PlaybookEntry[] {
+  const limit = params.limit ?? 6;
+
+  // Le mais do que precisa porque a deduplicacao por objecao descarta muitas.
+  const rows = asRows<{ directive: string }>(
+    statements.convertedDirectives.all(...CONVERTED_STAGES, params.excludeChatId, limit * 8),
+  );
+
+  const seen = new Set<string>();
+  const playbook: PlaybookEntry[] = [];
+
+  for (const row of rows) {
+    if (playbook.length >= limit) break;
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(row.directive) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    const objection = typeof parsed.objection === 'string' ? parsed.objection.trim() : '';
+    const directive = typeof parsed.directive === 'string' ? parsed.directive.trim() : '';
+
+    // Sem objecao nao ha licao: e so o funil a andar para a frente sozinho.
+    if (!directive || !objection || objection.toLowerCase() === 'nenhuma') continue;
+
+    const profile = typeof parsed.profile === 'string' ? parsed.profile : 'indefinido';
+    const key = `${profile}|${objection.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    playbook.push({
+      profile,
+      objection,
+      directive,
+      cta: typeof parsed.cta === 'string' ? parsed.cta : '',
+    });
+  }
+
+  return playbook;
+}
 
 /**
  * Guarda o comprovativo enviado pelo lead. Nao aprova nada: o registo fica

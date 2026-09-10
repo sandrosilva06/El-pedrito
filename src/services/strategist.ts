@@ -1,7 +1,14 @@
 import { GoogleGenAI, ThinkingLevel, Type, type Schema } from '@google/genai';
 
 import { env } from '../config/env';
-import { FUNNEL_STAGES, type FunnelStage, type Lead, type StoredMessage } from '../db/database';
+import {
+  FUNNEL_STAGES,
+  getConversionPlaybook,
+  type FunnelStage,
+  type Lead,
+  type PlaybookEntry,
+  type StoredMessage,
+} from '../db/database';
 import { createLogger } from '../utils/logger';
 import { withRetry } from './retry';
 
@@ -116,6 +123,15 @@ PERFIL DO LEAD (campo "profile") — classifica e adapta:
 - "recetivo": ja quer entrar. Vai direto ao passo seguinte, sem enrolar.
 - "indefinido": ainda nao ha sinal suficiente. Faz uma pergunta aberta.
 
+APRENDER COM O QUE JA CONVERTEU:
+- Quando receberes um bloco "ABORDAGENS QUE JA CONVERTERAM", ele contem
+  diretrizes reais que levaram outros leads ate ao deposito.
+- Se uma dessas entradas responde a mesma objecao ou ao mesmo perfil que tens
+  a frente, reaproveita o ANGULO que funcionou — o argumento, a ordem, o que
+  se disse primeiro. Nao copies o texto: cada lead e um lead.
+- Se nenhuma encaixa, ignora o bloco. Uma abordagem que resultou com outra
+  pessoa nao e razao para forcar o mesmo caminho aqui.
+
 COMO DECIDIR:
 - Le todo o historico antes de classificar. Nao repitas um passo ja concluido.
 - Uma objecao de cada vez. Ataca a objecao real, nao a que preferes responder.
@@ -145,6 +161,26 @@ let cachedClient: GoogleGenAI | null = null;
 function getClient(): GoogleGenAI {
   cachedClient ??= new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
   return cachedClient;
+}
+
+/**
+ * Diretrizes que ja levaram leads ao deposito, formatadas para o prompt. Com
+ * o funil vazio devolve string vazia e a seccao nem chega a existir — nao ha
+ * nada a ensinar e um bloco vazio so confundiria o modelo.
+ */
+function renderPlaybook(entries: PlaybookEntry[]): string {
+  if (entries.length === 0) return '';
+
+  const lines = entries
+    .map(
+      (entry, index) =>
+        `${index + 1}. [perfil: ${entry.profile} | objecao: ${entry.objection}]\n` +
+        `   Abordagem: ${entry.directive}\n` +
+        `   Passo pedido: ${entry.cta}`,
+    )
+    .join('\n');
+
+  return `\nABORDAGENS QUE JA CONVERTERAM (leads que chegaram ao deposito)\n${lines}\n`;
 }
 
 function renderHistory(history: StoredMessage[]): string {
@@ -192,6 +228,37 @@ function fallbackDirective(lead: Lead): SalesDirective {
 }
 
 /**
+ * Monta o prompt do turno. Exportado para ser testavel sem chamar a API: o
+ * bloco do playbook e a parte que muda a cada conversao e a que mais custa
+ * verificar so por observacao das respostas.
+ */
+export function buildPrompt(params: {
+  lead: Lead;
+  history: StoredMessage[];
+  incoming: string;
+}): string {
+  const { lead, history, incoming } = params;
+
+  return `CONTEXTO DO LEAD
+- chat_id: ${lead.chatId}
+- nome: ${lead.firstName ?? 'desconhecido'}
+- estagio atual: ${lead.stage}
+- mensagens trocadas: ${lead.messageCount}
+- anotacoes anteriores: ${lead.notes ?? '(nenhuma)'}
+
+HISTORICO RECENTE
+${renderHistory(history)}
+${renderPlaybook(getConversionPlaybook({ excludeChatId: lead.chatId }))}
+NOVA MENSAGEM DO LEAD
+${incoming}
+
+Devolve apenas o JSON da diretriz.`;
+}
+
+/** Instrucoes de sistema do estrategista, expostas para inspecao em testes. */
+export const STRATEGIST_SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION;
+
+/**
  * Etapa 1 da cadeia: o Gemini le o contexto e devolve a diretriz de vendas.
  * Nunca lanca — em caso de erro devolve uma diretriz conservadora.
  */
@@ -202,20 +269,7 @@ export async function planStrategy(params: {
 }): Promise<SalesDirective> {
   const { lead, history, incoming } = params;
 
-  const prompt = `CONTEXTO DO LEAD
-- chat_id: ${lead.chatId}
-- nome: ${lead.firstName ?? 'desconhecido'}
-- estagio atual: ${lead.stage}
-- mensagens trocadas: ${lead.messageCount}
-- anotacoes anteriores: ${lead.notes ?? '(nenhuma)'}
-
-HISTORICO RECENTE
-${renderHistory(history)}
-
-NOVA MENSAGEM DO LEAD
-${incoming}
-
-Devolva apenas o JSON da diretriz.`;
+  const prompt = buildPrompt(params);
 
   const startedAt = Date.now();
 

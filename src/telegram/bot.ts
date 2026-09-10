@@ -140,6 +140,23 @@ bot.command('start', async (ctx) => {
   const lead = leadFromContext(ctx);
   if (!lead) return;
 
+  const history = getRecentMessages(lead.chatId, 1);
+
+  // Quem ja falou connosco nao volta ao inicio. Repetir a apresentacao a quem
+  // ja passou pela qualificacao trata-o como um desconhecido e deita fora o
+  // trabalho todo da conversa anterior — alem de soar a robo, que e
+  // exatamente o que este funil evita.
+  if (history.length > 0) {
+    if (isRateLimited(lead.chatId)) {
+      log.warn(`rate limit atingido pelo chat ${lead.chatId} (/start)`);
+      return;
+    }
+
+    log.info(`/start de lead recorrente chat=${lead.chatId} estagio=${lead.stage}`);
+    await runFunnelTurn(ctx, lead.chatId, RETURNING_MARKER, { storeIncoming: false });
+    return;
+  }
+
   advanceStage(lead.chatId, 'qualificacao');
 
   const name = lead.firstName ? ` ${lead.firstName}` : '';
@@ -196,6 +213,68 @@ bot.command('stats', async (ctx) => {
 // Fluxo principal: mensagem de texto -> estrategista -> redator
 // ---------------------------------------------------------------------------
 
+/**
+ * Marcador de retorno. Nao e texto do lead: e o registo de que ele reapareceu
+ * sem dizer nada. Vai para as IAs como contexto, mas nao e gravado no
+ * historico — contar /start como turno faria a sequencia de abordagem saltar
+ * fases a cada clique, e um lead que carregasse cinco vezes chegaria ao link
+ * sem nunca ter falado.
+ */
+const RETURNING_MARKER = '[o lead voltou e carregou em /start; nao escreveu nada de novo]';
+
+/**
+ * Um turno do funil: le o historico, corre a cadeia estrategista -> redator,
+ * grava o resultado e responde. Partilhado entre as mensagens de texto e o
+ * /start de quem volta, para os dois caminhos nao divergirem.
+ */
+async function runFunnelTurn(
+  ctx: Context,
+  chatId: number,
+  incoming: string,
+  options: { storeIncoming: boolean },
+): Promise<void> {
+  await enqueue(chatId, async () => {
+    const stopTyping = keepTyping(ctx);
+
+    try {
+      // Historico lido ANTES de gravar a mensagem nova: as duas IAs recebem o
+      // passado como contexto e a mensagem atual separadamente.
+      const history = getRecentMessages(chatId);
+      const current = upsertLead({ chatId });
+
+      const directive = await planStrategy({ lead: current, history, incoming });
+      const answer = await writeReply({ lead: current, history, incoming, directive });
+
+      if (options.storeIncoming) {
+        addMessage({ chatId, role: 'user', content: incoming });
+      }
+
+      addMessage({
+        chatId,
+        role: 'assistant',
+        content: answer,
+        directive: JSON.stringify(directive),
+      });
+
+      advanceStage(chatId, directive.shouldStop ? 'perdido' : directive.stage);
+
+      if (directive.notes.trim().length > 0) {
+        const merged = [current.notes, directive.notes.trim()]
+          .filter((part): part is string => Boolean(part && part.length > 0))
+          .join(' | ');
+        setNotes(chatId, merged.slice(-2000));
+      }
+
+      stopTyping();
+      await reply(ctx, answer);
+
+      log.info(`respondido chat=${chatId} estagio=${directive.stage}`);
+    } finally {
+      stopTyping();
+    }
+  });
+}
+
 bot.on('message:text', async (ctx) => {
   const incomingRaw = ctx.message.text.trim();
 
@@ -210,44 +289,8 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  const incoming = incomingRaw.slice(0, MAX_INCOMING_LENGTH);
-
-  await enqueue(lead.chatId, async () => {
-    const stopTyping = keepTyping(ctx);
-
-    try {
-      // Historico lido ANTES de gravar a mensagem nova: as duas IAs recebem o
-      // passado como contexto e a mensagem atual separadamente.
-      const history = getRecentMessages(lead.chatId);
-      const current = upsertLead({ chatId: lead.chatId });
-
-      const directive = await planStrategy({ lead: current, history, incoming });
-      const answer = await writeReply({ lead: current, history, incoming, directive });
-
-      addMessage({ chatId: lead.chatId, role: 'user', content: incoming });
-      addMessage({
-        chatId: lead.chatId,
-        role: 'assistant',
-        content: answer,
-        directive: JSON.stringify(directive),
-      });
-
-      advanceStage(lead.chatId, directive.shouldStop ? 'perdido' : directive.stage);
-
-      if (directive.notes.trim().length > 0) {
-        const merged = [current.notes, directive.notes.trim()]
-          .filter((part): part is string => Boolean(part && part.length > 0))
-          .join(' | ');
-        setNotes(lead.chatId, merged.slice(-2000));
-      }
-
-      stopTyping();
-      await reply(ctx, answer);
-
-      log.info(`respondido chat=${lead.chatId} estagio=${directive.stage}`);
-    } finally {
-      stopTyping();
-    }
+  await runFunnelTurn(ctx, lead.chatId, incomingRaw.slice(0, MAX_INCOMING_LENGTH), {
+    storeIncoming: true,
   });
 });
 

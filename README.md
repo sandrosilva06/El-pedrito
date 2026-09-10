@@ -97,6 +97,18 @@ contrário — mandar o link cedo custa o lead duas vezes: perde-se o
 compromisso, e a conversa passa a parecer o spam de casino que toda a gente já
 recebeu.
 
+### Lead que volta
+
+Um `/start` de quem já falou connosco não reinicia nada: passa pela cadeia
+normal com um marcador interno, o estrategista lê o histórico e o estágio, e a
+resposta retoma o ponto exato onde a conversa parou. Um lead parado na pergunta
+de prontidão recebe *"ainda por cá, Sandro? Ficaste com alguma dúvida ou estás
+pronto para abrir a conta?"*, não a mensagem de boas-vindas.
+
+O marcador **não é gravado no histórico**: contar `/start` como turno faria a
+sequência de abordagem saltar fases a cada clique, e quem carregasse cinco
+vezes chegaria ao link sem nunca ter falado.
+
 ### Objeções com resposta fixa
 
 | Objeção | Ângulo |
@@ -306,7 +318,7 @@ contar o motivo.
 
 | Comando | Efeito |
 | --- | --- |
-| `/start` | Abre o funil e move o lead para `qualificacao`. |
+| `/start` | Primeira vez: acolhimento e qualificação. Quem já tem histórico é reconhecido e a conversa retoma no ponto onde ficou — sem reset e sem repetir a apresentação. |
 | `/reset` | Limpa o histórico e as anotações, mantendo o lead. |
 | `/parar` | Opt-out: apaga o lead e todo o histórico. |
 | `/stats` | Métricas do funil. Restrito aos `ADMIN_CHAT_IDS`; ignorado silenciosamente para os demais. |

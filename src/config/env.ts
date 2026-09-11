@@ -153,6 +153,15 @@ const schema = z
     IVAN_STORY_CLAIM: optionalString.transform((value) => value ?? ''),
     /** Banca aconselhada (nao exigida) para aguentar o dia. */
     IVAN_SUGGESTED_DEPOSIT: optionalString.transform((value) => value ?? '50€'),
+    /**
+     * Como se comportam os levantamentos na casa. Mesma regra do HIT_RATE e do
+     * PAYOUT do El Pedrito: e uma afirmacao sobre o servico de um terceiro,
+     * dita ao lead para ele destravar o deposito, por isso fica no ambiente e
+     * a autoria e de quem opera o bot. Vazia, o Ivan nao fala em prazos.
+     */
+    IVAN_WITHDRAWAL_CLAIM: optionalString.transform(
+      (value) => value ?? 'os saques sao praticamente instantaneos',
+    ),
     /** Casas do Ivan. A Plan Bet e a principal. */
     PLANBET_LINK: optionalString.transform((value) => value ?? ''),
     CASINO22_LINK: optionalString.transform((value) => value ?? ''),

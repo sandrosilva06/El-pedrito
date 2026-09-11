@@ -51,6 +51,16 @@ export interface Persona {
   maxBubbleChars: number;
 
   /**
+   * Aviso legal colado a mensagem que leva o link de afiliado. Vazio, nao se
+   * cola nada.
+   *
+   * Fica na persona, e nao no ambiente, porque e uma decisao editorial de cada
+   * influencer: uma variavel partilhada fazia com que desligar o aviso num
+   * bot o desligasse no outro.
+   */
+  complianceNote: string;
+
+  /**
    * Limpeza de estilo propria desta persona, corrida depois do sanitizador
    * comum e antes de o texto ir para o historico.
    *

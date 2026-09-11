@@ -341,6 +341,9 @@ export const elPedrito: Persona = {
   defaultLink: env.AFFILIATE_LINK,
   maxBubbleChars: 200,
 
+  // O El Pedrito mantem o aviso legal colado ao link, como sempre teve.
+  complianceNote: env.COMPLIANCE_NOTE,
+
   remarketing: {
     briefs: {
       nao_convertido: `Estes leads falaram contigo e nao avancaram para o grupo.

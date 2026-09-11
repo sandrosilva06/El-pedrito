@@ -120,9 +120,10 @@ function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number
         'teres acesso imediato ao VIP.'
       : 'NAO incluas nenhum link nesta mensagem.';
 
-  const complianceRule = sendLink
-    ? `Ao mandar o link, fecha a mensagem com este aviso, em linha separada: "${env.COMPLIANCE_NOTE}"`
-    : 'Nao e preciso repetir o aviso legal nesta mensagem.';
+  const complianceRule =
+    sendLink && persona.complianceNote
+      ? `Ao mandar o link, fecha a mensagem com este aviso, em linha separada: "${persona.complianceNote}"`
+      : 'Nao e preciso repetir o aviso legal nesta mensagem.';
 
   const stopRule = directive.shouldStop
     ? 'ENCERRAMENTO: agradece, respeita a decisao do lead, diz que ele pode voltar a falar quando quiser e NAO faças nenhuma oferta nem pergunta de vendas.'

@@ -152,12 +152,32 @@ const schema = z
     /**
      * Quantas mensagens de remarketing um lead que nao converteu recebe, no
      * total, antes de o bot se calar. Sem tecto, o lead que nao respondeu ao
-     * decimo lembrete tambem nao responde ao centesimo — so bloqueia o bot, e
+     * segundo lembrete tambem nao responde ao decimo — so bloqueia o bot, e
      * bloqueios em massa fazem o Telegram limitar a conta.
+     *
+     * O codigo trava isto em 2 de qualquer maneira (ver NAO_CONVERTIDO_TOUCHES
+     * no servico): so ha guiao escrito para dois toques, e um terceiro sairia
+     * sem texto proprio.
      */
-    REMARKETING_MAX_TOUCHES: intFromString(9, 1, 1000),
+    REMARKETING_MAX_TOUCHES: intFromString(2, 1, 1000),
     /** Horas minimas entre a ultima atividade do lead e um lembrete. */
     REMARKETING_QUIET_HOURS: intFromString(20, 1, 720),
+    /**
+     * Quanto tempo o lead tem de estar calado antes do PRIMEIRO toque. Conta
+     * desde a ultima coisa que ele disse, nao desde que entrou.
+     */
+    REMARKETING_FIRST_TOUCH_HOURS: intFromString(24, 1, 720),
+    /**
+     * Intervalo entre o primeiro e o segundo toque. Com o valor por omissao o
+     * segundo cai as 72h de silencio (24 + 48), que e o que se combinou.
+     */
+    REMARKETING_SECOND_TOUCH_HOURS: intFromString(48, 1, 720),
+    /**
+     * Pausa entre envios dentro da mesma campanha. O Telegram limita a ~30
+     * mensagens por segundo e responde a rajadas com 429; 120ms deixa margem
+     * e continua a despachar uma lista grande em pouco tempo.
+     */
+    REMARKETING_SEND_INTERVAL_MS: intFromString(120, 0, 60_000),
 
     RATE_LIMIT_MAX: intFromString(12, 1, 1000),
     RATE_LIMIT_WINDOW_SECONDS: intFromString(60, 1, 3600),

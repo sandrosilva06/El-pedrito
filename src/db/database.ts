@@ -216,6 +216,10 @@ addColumnIfMissing('leads', 'promise_note', 'TEXT');
 // Cantao onde o lead vive. Primeira classe, e nao dentro das notas, porque a
 // regra de nao voltar a perguntar precisa de o consultar deterministicamente.
 addColumnIfMissing('leads', 'canton', 'TEXT');
+// Lead que respondeu a um toque de remarketing: sai da campanha de vez. Sem
+// isto o filtro por `updated_at` so adiava, e passada a janela a pessoa que ja
+// tinha respondido voltava a entrar na lista.
+addColumnIfMissing('leads', 'remarketing_cancelled', 'INTEGER NOT NULL DEFAULT 0');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS remarketing_runs (
@@ -352,6 +356,16 @@ const statements = {
      WHERE chat_id = ?
   `),
   markBlocked: db.prepare("UPDATE leads SET blocked = 1 WHERE chat_id = ?"),
+  cancelRemarketing: db.prepare(`
+    UPDATE leads
+       SET remarketing_cancelled = 1
+     WHERE chat_id = ?
+       -- So conta como resposta AO remarketing. Quem escreve antes de ter
+       -- levado algum toque esta so a conversar, e continua elegivel se
+       -- depois arrefecer.
+       AND last_remarketing_at IS NOT NULL
+       AND remarketing_cancelled = 0
+  `),
   setCanton: db.prepare(`
     UPDATE leads SET canton = ?, updated_at = datetime('now')
      WHERE chat_id = ? AND (canton IS NULL OR canton = '')
@@ -378,8 +392,12 @@ const statements = {
   targetsNotConverted: db.prepare(`
     SELECT * FROM leads
      WHERE blocked = 0
+       -- Ja respondeu a um toque: a campanha acabou para ele.
+       AND remarketing_cancelled = 0
        AND stage NOT IN ('perdido', ${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
-       AND remarketing_touches < ?
+       -- Toque exacto, e nao "menos de N": cada toque tem texto proprio, e a
+       -- lista de um toque nao pode levar a mensagem do outro.
+       AND remarketing_touches = ?
        -- Quem prometeu ja tem lembrete proprio marcado; dois no mesmo dia
        -- e que fazem a pessoa bloquear o bot.
        AND promised_at IS NULL
@@ -615,20 +633,39 @@ export function recordRemarketingSent(
  */
 export function getRemarketingTargets(params: {
   audience: RemarketingAudience;
-  maxTouches: number;
-  quietHours: number;
+  /**
+   * Quantos toques o lead ja levou. Para "nao_convertido" e uma igualdade
+   * exacta, porque cada toque tem texto proprio. Ignorado no publico VIP.
+   */
+  touch?: number;
+  /** Ha quanto tempo o lead tem de estar calado para entrar na lista. */
+  coldHours: number;
+  /** Intervalo minimo desde o ultimo toque. */
+  sinceLastTouchHours: number;
   limit: number;
 }): Lead[] {
-  const quiet = `-${params.quietHours} hours`;
+  const cold = `-${params.coldHours} hours`;
+  const sinceLast = `-${params.sinceLastTouchHours} hours`;
 
   const rows =
     params.audience === 'vip'
-      ? asRows<LeadRow>(statements.targetsVip.all(quiet, params.limit))
+      ? asRows<LeadRow>(statements.targetsVip.all(sinceLast, params.limit))
       : asRows<LeadRow>(
-          statements.targetsNotConverted.all(params.maxTouches, quiet, quiet, params.limit),
+          statements.targetsNotConverted.all(params.touch ?? 0, cold, sinceLast, params.limit),
         );
 
   return rows.map(mapLead);
+}
+
+/**
+ * O lead respondeu depois de ter levado um toque: sai da campanha.
+ *
+ * E a diferenca entre um funil e spam. Quem responde volta a ter uma conversa
+ * a serio, e continuar a mandar-lhe guioes automaticos por cima disso e o que
+ * faz a pessoa bloquear o bot.
+ */
+export function cancelRemarketing(chatId: number): void {
+  statements.cancelRemarketing.run(chatId);
 }
 
 export function markRemarketed(chatId: number): void {

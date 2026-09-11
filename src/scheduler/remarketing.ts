@@ -10,7 +10,11 @@ import {
   type Lead,
   type RemarketingAudience,
 } from '../db/database';
-import { generateRemarketingMessage, personalise } from '../services/remarketing';
+import {
+  NAO_CONVERTIDO_TOUCHES,
+  generateRemarketingMessage,
+  personalise,
+} from '../services/remarketing';
 import { createLogger } from '../utils/logger';
 import { nowInTimezone } from '../utils/timezone';
 import { bot } from '../telegram/bot';
@@ -22,8 +26,15 @@ const AUDIENCES: RemarketingAudience[] = ['nao_convertido', 'vip'];
 /** Tecto por slot: uma campanha nao deve inundar a API do Telegram de uma vez. */
 const BATCH_LIMIT = 200;
 
-/** O Telegram limita a ~30 mensagens por segundo; 120ms deixa margem. */
-const SEND_INTERVAL_MS = 120;
+/** Pausa entre envios, para nao atirar a campanha toda de uma vez ao Telegram. */
+const SEND_INTERVAL_MS = env.REMARKETING_SEND_INTERVAL_MS;
+
+/**
+ * Tecto de toques a quem nao converteu. Fica travado no numero de guioes
+ * escritos: um toque a mais sairia sem texto proprio, e a variavel de ambiente
+ * pode estar posta num valor antigo num deploy que ja esta a correr.
+ */
+const MAX_TOUCHES = Math.min(env.REMARKETING_MAX_TOUCHES, NAO_CONVERTIDO_TOUCHES.length);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -54,33 +65,56 @@ async function sendToAudience(
   // janela reenviaria a campanha inteira.
   if (!claimRemarketingSlot(slot, date, audience)) return;
 
-  const targets = getRemarketingTargets({
-    audience,
-    maxTouches: env.REMARKETING_MAX_TOUCHES,
-    quietHours: env.REMARKETING_QUIET_HOURS,
-    limit: BATCH_LIMIT,
-  });
+  // O VIP e uma lista so; quem nao converteu corre toque a toque, porque cada
+  // toque tem o seu texto e a sua janela de tempo.
+  const touches = audience === 'vip' ? [0] : [...Array(MAX_TOUCHES).keys()];
 
-  if (targets.length === 0) {
+  let sent = 0;
+  let considered = 0;
+
+  for (const touch of touches) {
+    const targets = getRemarketingTargets({
+      audience,
+      touch,
+      // Primeiro toque: conta desde a ultima coisa que o lead disse. Segundo:
+      // continua a exigir o mesmo silencio, mais o intervalo desde o toque 1.
+      coldHours: env.REMARKETING_FIRST_TOUCH_HOURS,
+      sinceLastTouchHours:
+        audience === 'vip'
+          ? env.REMARKETING_QUIET_HOURS
+          : touch === 0
+            ? env.REMARKETING_FIRST_TOUCH_HOURS
+            : env.REMARKETING_SECOND_TOUCH_HOURS,
+      limit: BATCH_LIMIT,
+    });
+
+    if (targets.length === 0) continue;
+
+    considered += targets.length;
+
+    const { template, generated } = await generateRemarketingMessage(audience, touch);
+    log.info(
+      `slot ${slot} (${audience}, toque ${touch + 1}): ${targets.length} leads, ` +
+        `mensagem ${generated ? 'gerada' : 'de reserva'}`,
+    );
+
+    for (const lead of targets) {
+      const delivered = await sendOne(lead, template);
+      if (delivered) sent += 1;
+
+      // A pausa fica DENTRO da fila e nao entre toques: e o ritmo de entrega
+      // ao Telegram que interessa, nao a fronteira entre as duas listas.
+      await sleep(SEND_INTERVAL_MS);
+    }
+  }
+
+  if (considered === 0) {
     log.info(`slot ${slot} (${audience}): nenhum lead elegivel`);
     return;
   }
 
-  const { template, generated } = await generateRemarketingMessage(audience);
-  log.info(
-    `slot ${slot} (${audience}): ${targets.length} leads, mensagem ${generated ? 'gerada' : 'de reserva'}`,
-  );
-
-  let sent = 0;
-
-  for (const lead of targets) {
-    const delivered = await sendOne(lead, template);
-    if (delivered) sent += 1;
-    await sleep(SEND_INTERVAL_MS);
-  }
-
   recordRemarketingSent(slot, date, audience, sent);
-  log.info(`slot ${slot} (${audience}): ${sent}/${targets.length} entregues`);
+  log.info(`slot ${slot} (${audience}): ${sent}/${considered} entregues`);
 }
 
 async function sendOne(lead: Lead, template: string): Promise<boolean> {
@@ -178,7 +212,10 @@ export function startRemarketingScheduler(): void {
 
   log.info(
     `remarketing activo — slots ${slots.join(', ')} (${env.REMARKETING_TIMEZONE}), ` +
-      `tecto de ${env.REMARKETING_MAX_TOUCHES} lembretes por lead, ` +
+      `${MAX_TOUCHES} toque(s) por lead que nao converteu ` +
+      `(1.o as ${env.REMARKETING_FIRST_TOUCH_HOURS}h de silencio, ` +
+      `2.o ${env.REMARKETING_SECOND_TOUCH_HOURS}h depois), ` +
+      `${SEND_INTERVAL_MS}ms entre envios, ` +
       'lembretes de promessa a cada minuto',
   );
 

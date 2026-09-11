@@ -4,6 +4,7 @@ import { env } from '../config/env';
 import {
   addMessage,
   advanceStage,
+  cancelRemarketing,
   clearHistory,
   forgetLead,
   getRecentMessages,
@@ -91,12 +92,20 @@ function leadFromContext(ctx: Context): Lead | null {
   const chatId = ctx.chat?.id;
   if (chatId === undefined) return null;
 
-  return upsertLead({
+  const lead = upsertLead({
     chatId,
     firstName: ctx.from?.first_name ?? null,
     username: ctx.from?.username ?? null,
     languageCode: ctx.from?.language_code ?? null,
   });
+
+  // Qualquer sinal de vida de quem ja levou um toque encerra a campanha para
+  // ele. Fica aqui, e nao no handler de texto, porque uma foto ou um sticker
+  // sao resposta na mesma: a pessoa voltou, e quem voltou passa a ter uma
+  // conversa a serio em vez de guioes automaticos por cima.
+  cancelRemarketing(chatId);
+
+  return lead;
 }
 
 /** O Telegram rejeita mensagens acima de 4096 caracteres. */

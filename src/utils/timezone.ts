@@ -19,6 +19,16 @@ function formatInTimezone(date: Date, timeZone: string): string {
   }).format(date);
 }
 
+/**
+ * Instante legivel, para etiquetar o que chega ("2026-09-11 01:02"). Recebe a
+ * data em vez de a ler do relogio: uma midia reencaminhada deve levar a hora a
+ * que o lead a enviou, nao a hora a que o servidor a processou, que pode vir
+ * muito depois quando o webhook acumulou updates.
+ */
+export function formatInstant(date: Date, timeZone: string): string {
+  return formatInTimezone(date, timeZone);
+}
+
 export function nowInTimezone(timeZone: string): { date: string; time: string } {
   const [date, time] = formatInTimezone(new Date(), timeZone).split(' ');
   return { date: date ?? '', time: time ?? '' };

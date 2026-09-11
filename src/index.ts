@@ -119,6 +119,19 @@ async function start(): Promise<void> {
     log.info(`HTTP ouvindo na porta ${env.PORT}`);
   });
 
+  // Um canal de log mal configurado so se descobre quando o primeiro print se
+  // perde, por isso o destino das midias diz-se em voz alta no arranque.
+  if (env.mediaLogChatIds.length === 0) {
+    log.error(
+      `${env.mediaLogSource} nao tem nenhum id de chat valido: as imagens recebidas ` +
+        'nao vao ser reencaminhadas para lado nenhum.',
+    );
+  } else {
+    log.info(
+      `copias das midias vao para ${env.mediaLogChatIds.join(', ')} (via ${env.mediaLogSource})`,
+    );
+  }
+
   if (env.modeSource === 'forcado-em-producao') {
     log.warn(
       'TELEGRAM_MODE pedia polling, mas em producao com URL publica o webhook e imposto ' +

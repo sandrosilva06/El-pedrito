@@ -37,15 +37,24 @@ const intFromString = (fallback: number, min: number, max: number) =>
  */
 const DEFAULT_ADMIN_CHAT_IDS = [-1_004_453_145_425];
 
+/**
+ * Le uma lista de chat ids separados por virgula.
+ *
+ * Ids de grupo e canal sao negativos e grandes; acima de 2^53 o Number perde
+ * precisao e a mensagem iria parar a um chat que nao existe, por isso os que
+ * nao sobrevivem inteiros sao deitados fora aqui e nao mais a frente.
+ */
+function parseChatIds(value: string | undefined): number[] {
+  if (value === undefined) return [];
+
+  return value
+    .split(',')
+    .map((part) => Number(part.trim()))
+    .filter((part) => Number.isSafeInteger(part));
+}
+
 const csvNumbers = optionalString.transform((value) =>
-  value === undefined
-    ? DEFAULT_ADMIN_CHAT_IDS
-    : value
-        .split(',')
-        .map((part) => Number(part.trim()))
-        // Ids de grupo e canal sao negativos e grandes; acima de 2^53 o Number
-        // perde precisao e a mensagem iria para um chat que nao existe.
-        .filter((part) => Number.isSafeInteger(part)),
+  value === undefined ? DEFAULT_ADMIN_CHAT_IDS : parseChatIds(value),
 );
 
 const schema = z
@@ -205,6 +214,18 @@ const schema = z
     RATE_LIMIT_WINDOW_SECONDS: intFromString(60, 1, 3600),
 
     ADMIN_CHAT_IDS: csvNumbers,
+
+    /**
+     * Canal de controlo para onde vao as copias das imagens recebidas. Quando
+     * definido, SUBSTITUI o ADMIN_CHAT_IDS como destino das midias: quem o
+     * configura quer redirecionar, e uniao das duas listas entregaria a mesma
+     * imagem duas vezes.
+     *
+     * TELEGRAM_ADMIN_CHAT_ID e aceite como nome alternativo do mesmo campo.
+     * Ambos aceitam varios ids separados por virgula.
+     */
+    TELEGRAM_LOG_CHANNEL_ID: optionalString,
+    TELEGRAM_ADMIN_CHAT_ID: optionalString,
   });
 
 export type Env = Omit<
@@ -231,6 +252,10 @@ export type Env = Omit<
   modeSource: 'explicito' | 'automatico' | 'forcado-em-producao';
   /** Producao sem URL publica: nao da para registrar webhook e o bot fica mudo. */
   missingPublicUrlInProduction: boolean;
+  /** Destino das copias das midias recebidas, ja resolvido. */
+  mediaLogChatIds: number[];
+  /** De onde veio esse destino, para o log de arranque dizer o que esta ativo. */
+  mediaLogSource: 'TELEGRAM_LOG_CHANNEL_ID' | 'TELEGRAM_ADMIN_CHAT_ID' | 'ADMIN_CHAT_IDS';
 };
 
 /**
@@ -358,7 +383,35 @@ function load(): Env {
         ? 'explicito'
         : 'automatico',
     missingPublicUrlInProduction,
+    ...resolveMediaLog(value.TELEGRAM_LOG_CHANNEL_ID, value.TELEGRAM_ADMIN_CHAT_ID, value.ADMIN_CHAT_IDS),
   };
+}
+
+/**
+ * Escolhe para onde vao as copias das imagens.
+ *
+ * O canal dedicado ganha ao ADMIN_CHAT_IDS em vez de se somar a ele: quem
+ * configura um canal de log quer redirecionar as midias, e somar as duas
+ * listas entregaria a mesma imagem duas vezes a quem estivesse nas duas.
+ *
+ * Uma variavel presente mas sem nenhum id valido nao cai para tras em
+ * silencio: e um id mal escrito, e mandar as imagens para o destino antigo
+ * esconderia o erro de quem acabou de o configurar.
+ */
+function resolveMediaLog(
+  logChannel: string | undefined,
+  adminChat: string | undefined,
+  fallback: number[],
+): Pick<Env, 'mediaLogChatIds' | 'mediaLogSource'> {
+  if (logChannel !== undefined) {
+    return { mediaLogChatIds: parseChatIds(logChannel), mediaLogSource: 'TELEGRAM_LOG_CHANNEL_ID' };
+  }
+
+  if (adminChat !== undefined) {
+    return { mediaLogChatIds: parseChatIds(adminChat), mediaLogSource: 'TELEGRAM_ADMIN_CHAT_ID' };
+  }
+
+  return { mediaLogChatIds: fallback, mediaLogSource: 'ADMIN_CHAT_IDS' };
 }
 
 export const env: Env = load();

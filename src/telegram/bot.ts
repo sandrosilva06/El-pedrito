@@ -23,7 +23,7 @@ import { createLogger } from '../utils/logger';
 import { persona } from '../personas';
 import { sanitiseDashes } from '../utils/text';
 import { detectCanton } from '../utils/canton';
-import { nextOccurrenceUtc } from '../utils/timezone';
+import { formatInstant, nextOccurrenceUtc } from '../utils/timezone';
 
 const log = createLogger('telegram');
 
@@ -32,7 +32,13 @@ export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 const MAX_INCOMING_LENGTH = 2000;
 
+// Quem pode correr /stats. Continua a ser o ADMIN_CHAT_IDS: e uma permissao
+// de comando, nao um destino de entrega, e nao acompanha o canal de midias.
 const adminChatIds = new Set(env.ADMIN_CHAT_IDS);
+
+// Para onde vao as copias das imagens recebidas, ja resolvido no env a partir
+// do TELEGRAM_LOG_CHANNEL_ID, do TELEGRAM_ADMIN_CHAT_ID ou do ADMIN_CHAT_IDS.
+const mediaLogChatIds = env.mediaLogChatIds;
 
 /**
  * Uma fila por chat. O Telegram entrega updates em paralelo e o lead costuma
@@ -423,11 +429,25 @@ bot.on('message:text', async (ctx) => {
 });
 
 /**
- * Comprovativo de deposito. O bot NUNCA aprova sozinho: guarda o ficheiro,
- * avisa quem valida e responde ao lead que a validacao esta em curso. Libertar
- * o acesso automaticamente daria grupo a quem mandasse qualquer imagem.
+ * Midia recebida no privado.
+ *
+ * Faz duas coisas que se mantem separadas de proposito. A primeira e copiar a
+ * imagem para o canal de controlo, e essa acontece SEMPRE: qualquer foto que
+ * entre e reencaminhada, sirva ou nao de comprovativo, e mesmo que o registo
+ * na base de dados falhe. A segunda e tratar o anexo como comprovativo de
+ * deposito, e essa so acontece se o anexo tiver forma de o ser.
+ *
+ * O bot NUNCA aprova sozinho: guarda o ficheiro, avisa quem valida e diz ao
+ * lead que a validacao esta em curso. Libertar o acesso automaticamente daria
+ * grupo a quem mandasse qualquer imagem.
  */
 bot.on([':photo', ':document'], async (ctx) => {
+  // So o privado. O funil e um para um, e sem esta guarda uma foto qualquer
+  // publicada num grupo onde o bot esteja viraria comprovativo de deposito.
+  // O allowed_updates ja limita a updates de "message", mas isso e uma linha
+  // no arranque e esta regra tem de valer por si.
+  if (ctx.chat?.type !== 'private') return;
+
   const lead = leadFromContext(ctx);
   if (!lead) return;
 
@@ -443,33 +463,57 @@ bot.on([':photo', ':document'], async (ctx) => {
   // outros anexos, nao.
   const isImageDocument = document?.mime_type?.startsWith('image/') === true;
   const isPdfDocument = document?.mime_type === 'application/pdf';
+  const servesAsProof = Boolean(photo) || isImageDocument || isPdfDocument;
 
-  const fileId = photo?.file_id ?? (isImageDocument || isPdfDocument ? document?.file_id : undefined);
+  // Para a copia serve qualquer ficheiro; para comprovativo, so os de cima.
+  const fileId = photo?.file_id ?? document?.file_id;
   const fileKind: 'photo' | 'document' = photo ? 'photo' : 'document';
 
-  if (!fileId) {
+  let proofId: number | null = null;
+
+  if (servesAsProof && fileId) {
+    try {
+      proofId = recordDepositProof({
+        chatId: lead.chatId,
+        leadName: lead.firstName,
+        username: lead.username,
+        fileId,
+        messageId: message.message_id,
+      }).id;
+
+      advanceStage(lead.chatId, 'comprovativo_recebido');
+      // Cumpriu: nao faz sentido continuar a lembra-lo de depositar.
+      clearDepositPromise(lead.chatId);
+
+      // Fica no historico para o estrategista nao voltar a pedir o comprovativo.
+      addMessage({
+        chatId: lead.chatId,
+        role: 'user',
+        content: '[o lead enviou um comprovativo de deposito]',
+      });
+    } catch (error) {
+      // O registo falhou, mas a imagem existe e alguem tem de a ver. A copia
+      // abaixo segue na mesma, com a nota de que nao ficou registada.
+      log.error(`falha a registar o comprovativo do chat ${lead.chatId}`, error);
+    }
+  }
+
+  if (fileId) {
+    await forwardMedia({
+      lead,
+      fileId,
+      fileKind,
+      proofId,
+      servesAsProof,
+      sentAt: new Date(message.date * 1000),
+      leadCaption: message.caption ?? null,
+    });
+  }
+
+  if (!servesAsProof) {
     await ctx.reply('Manda antes um print ou uma foto do comprovativo, se faz favor.');
     return;
   }
-
-  const proof = recordDepositProof({
-    chatId: lead.chatId,
-    leadName: lead.firstName,
-    username: lead.username,
-    fileId,
-    messageId: message.message_id,
-  });
-
-  advanceStage(lead.chatId, 'comprovativo_recebido');
-  // Cumpriu: nao faz sentido continuar a lembra-lo de depositar.
-  clearDepositPromise(lead.chatId);
-
-  // Fica no historico para o estrategista nao voltar a pedir o comprovativo.
-  addMessage({
-    chatId: lead.chatId,
-    role: 'user',
-    content: '[o lead enviou um comprovativo de deposito]',
-  });
 
   const answer = persona.proofAcknowledgement(lead.firstName);
 
@@ -477,57 +521,97 @@ bot.on([':photo', ':document'], async (ctx) => {
   dispatchMessage(ctx, lead.chatId, answer);
 
   log.info(
-    `comprovativo #${proof.id} recebido — chat=${lead.chatId} nome=${lead.firstName ?? '?'} ` +
-      `username=${lead.username ? '@' + lead.username : '?'} aguarda validacao manual`,
+    `midia recebida${proofId === null ? '' : ` (comprovativo #${proofId})`} — ` +
+      `chat=${lead.chatId} nome=${lead.firstName ?? '?'} ` +
+      `username=${lead.username ? '@' + lead.username : '?'}`,
   );
-
-  await notifyAdmins(proof.id, lead, fileId, fileKind);
 });
 
+/** Limite de legenda do Telegram em midias. Acima disto o envio e recusado. */
+const TELEGRAM_MAX_CAPTION_LENGTH = 1024;
+
+interface ForwardedMedia {
+  lead: Lead;
+  fileId: string;
+  fileKind: 'photo' | 'document';
+  /** Numero do comprovativo, ou null se o anexo nao foi registado como tal. */
+  proofId: number | null;
+  servesAsProof: boolean;
+  /** Hora a que o lead enviou, nao a que o servidor processou. */
+  sentAt: Date;
+  /** Legenda que o proprio lead escreveu, se escreveu alguma. */
+  leadCaption: string | null;
+}
+
+/** Identificacao do lead que vai na legenda da copia. */
+function buildCaption(media: ForwardedMedia): string {
+  const { lead, proofId, servesAsProof, sentAt, leadCaption } = media;
+
+  const header = servesAsProof
+    ? proofId === null
+      ? 'Print recebido (FALHOU o registo na base de dados)'
+      : `Comprovativo #${proofId} — validacao manual`
+    : 'Midia recebida — nao serve de comprovativo';
+
+  const lines = [
+    header,
+    '',
+    // `||` e nao `??`: o Telegram entrega first_name vazio em contas apagadas,
+    // e uma linha "Nome:" em branco nao diz a quem valida que nao ha nome.
+    `Nome: ${lead.firstName || '(sem nome)'}`,
+    `Username: ${lead.username ? `@${lead.username}` : '(sem username)'}`,
+    `ID: ${lead.chatId}`,
+    `Data: ${formatInstant(sentAt, env.REMARKETING_TIMEZONE)} (${env.REMARKETING_TIMEZONE})`,
+  ];
+
+  if (leadCaption) lines.push('', `Legenda do lead: ${leadCaption}`);
+
+  const caption = lines.join('\n');
+
+  // Uma legenda comprida demais faz o Telegram recusar o envio inteiro, e
+  // perder a imagem por causa do texto do lead seria o pior dos dois mundos.
+  return caption.length <= TELEGRAM_MAX_CAPTION_LENGTH
+    ? caption
+    : `${caption.slice(0, TELEGRAM_MAX_CAPTION_LENGTH - 1)}\u2026`;
+}
+
 /**
- * Encaminha o comprovativo a quem valida. Sem isto o registo ficaria so na base
- * de dados e o lead esperaria por alguem que nao sabe que ele existe.
+ * Copia a midia para o canal de controlo. Sem isto o registo ficaria so na
+ * base de dados e o lead esperaria por alguem que nao sabe que ele existe.
  */
-async function notifyAdmins(
-  proofId: number,
-  lead: Lead,
-  fileId: string,
-  fileKind: 'photo' | 'document',
-): Promise<void> {
-  if (adminChatIds.size === 0) {
-    log.error('sem destino de administracao: comprovativo guardado, mas ninguem foi avisado');
+async function forwardMedia(media: ForwardedMedia): Promise<void> {
+  if (mediaLogChatIds.length === 0) {
+    log.error(
+      `sem destino de controlo (${env.mediaLogSource} nao tem nenhum id valido): ` +
+        'a midia foi guardada, mas ninguem foi avisado',
+    );
     return;
   }
 
-  const caption =
-    `Comprovativo #${proofId} — validacao manual\n\n` +
-    `Nome: ${lead.firstName ?? '(sem nome)'}\n` +
-    `Username: ${lead.username ? `@${lead.username}` : '(sem username)'}\n` +
-    `ID: ${lead.chatId}`;
-
+  const caption = buildCaption(media);
   let delivered = 0;
 
-  for (const adminId of adminChatIds) {
+  for (const destination of mediaLogChatIds) {
     try {
       // Reenvia por file_id: sem download nem reupload do ficheiro. Um PDF
       // enviado por sendPhoto seria recusado, dai distinguir o tipo.
-      if (fileKind === 'photo') {
-        await bot.api.sendPhoto(adminId, fileId, { caption });
+      if (media.fileKind === 'photo') {
+        await bot.api.sendPhoto(destination, media.fileId, { caption });
       } else {
-        await bot.api.sendDocument(adminId, fileId, { caption });
+        await bot.api.sendDocument(destination, media.fileId, { caption });
       }
 
       delivered += 1;
     } catch (error) {
-      log.error(`falha ao enviar o comprovativo #${proofId} para ${adminId}`, error);
+      log.error(`falha ao enviar a midia do chat ${media.lead.chatId} para ${destination}`, error);
 
       // Sem o ficheiro, pelo menos os dados do lead chegam — dao para o
       // encontrar a mao pelo ID.
       try {
-        await bot.api.sendMessage(adminId, `${caption}\n\n(o ficheiro nao pode ser reenviado)`);
+        await bot.api.sendMessage(destination, `${caption}\n\n(o ficheiro nao pode ser reenviado)`);
         delivered += 1;
       } catch (fallbackError) {
-        log.error(`nem o aviso de texto chegou a ${adminId}`, fallbackError);
+        log.error(`nem o aviso de texto chegou a ${destination}`, fallbackError);
       }
     }
   }
@@ -535,7 +619,7 @@ async function notifyAdmins(
   if (delivered === 0) {
     // O lead ficou a espera de uma validacao que nao foi pedida a ninguem.
     log.error(
-      `comprovativo #${proofId} nao chegou a nenhum destino de administracao. ` +
+      `a midia do chat ${media.lead.chatId} nao chegou a nenhum destino de controlo. ` +
         'Confirma que o bot pertence ao grupo/canal e tem permissao para publicar.',
     );
   }

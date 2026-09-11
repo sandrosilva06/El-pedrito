@@ -50,6 +50,16 @@ export interface Persona {
    */
   maxBubbleChars: number;
 
+  /**
+   * Limpeza de estilo propria desta persona, corrida depois do sanitizador
+   * comum e antes de o texto ir para o historico.
+   *
+   * Existe porque ha regras que o modelo esquece a meio da conversa por mais
+   * que o prompt insista, e algumas delas sao precisamente as que denunciam
+   * texto automatico. Ausente, o texto segue como veio.
+   */
+  styleGuard?(text: string): string;
+
   remarketing: {
     briefs: Record<RemarketingAudience, string>;
     fallbacks: Record<RemarketingAudience, string[]>;

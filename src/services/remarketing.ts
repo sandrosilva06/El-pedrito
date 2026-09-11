@@ -73,7 +73,8 @@ export async function generateRemarketingMessage(
         },
       });
 
-      return sanitiseDashes(response.text ?? '');
+      const clean = sanitiseDashes(response.text ?? '');
+      return persona.styleGuard ? persona.styleGuard(clean) : clean;
     },
   });
 

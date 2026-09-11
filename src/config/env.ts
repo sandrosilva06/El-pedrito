@@ -132,12 +132,19 @@ const schema = z
     IVAN_NAME: optionalString.transform((value) => value ?? 'Ivan Rodrigues'),
     IVAN_MIN_DEPOSIT: optionalString.transform((value) => value ?? '25€'),
     /**
-     * Lifestyle que o Ivan pode referir. Fica em variavel, e nao fixo no
-     * prompt, pela mesma razao dos numeros de resultados: e uma afirmacao de
-     * facto sobre bens e ganhos, dita ao lead antes de ele depositar. Vazia,
-     * o Ivan nao fala de carros nem de casas.
+     * Lifestyle que o Ivan pode referir, como prova de que o caminho existe.
+     * Fica em variavel, e nao fixo no prompt, pela mesma razao dos numeros de
+     * resultados: sao afirmacoes de facto sobre bens e ganhos, ditas ao lead
+     * antes de ele depositar, e a responsabilidade por elas e de quem opera o
+     * bot, nao do codigo. Pode ser reescrita no ambiente a qualquer momento.
      */
-    IVAN_LIFESTYLE_CLAIM: optionalString.transform((value) => value ?? ''),
+    IVAN_LIFESTYLE_CLAIM: optionalString.transform(
+      (value) =>
+        value ??
+        'faturou mais de 3 milhoes de euros pela internet, vive entre Portugal e ' +
+          'as casas que tem no Dubai, anda de Porsche Taycan e de Mercedes CLA 45 ' +
+          'AMG, e o que mais o orgulha e dar a familia uma vida de conforto',
+    ),
     /**
      * Historia de origem do Ivan. Mesma regra do lifestyle: e uma afirmacao
      * sobre a vida dele, contada ao lead para criar identificacao antes de o

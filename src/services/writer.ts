@@ -375,8 +375,9 @@ export async function writeReply(params: {
 
       // Limpa aqui, e nao so no envio: a resposta tambem vai para o
       // historico, e um travessao gravado ensina o modelo a repeti-lo no
-      // turno seguinte.
-      return sanitiseDashes(result.text ?? '');
+      // turno seguinte. O mesmo vale para a guarda da persona.
+      const clean = sanitiseDashes(result.text ?? '');
+      return persona.styleGuard ? persona.styleGuard(clean) : clean;
     },
   });
 

@@ -158,7 +158,9 @@ async function sendHumanPaced(ctx: Context, text: string): Promise<void> {
   // Ultima barreira antes do Telegram. O redator ja limpa o que gera, mas por
   // aqui passa tambem texto que ele nao escreveu — o aviso legal, o link e as
   // mensagens fixas vindas do ambiente.
-  const bubbles = splitIntoBubbles(sanitiseDashes(text), env.MAX_BUBBLES);
+  const clean = sanitiseDashes(text);
+  const polished = persona.styleGuard ? persona.styleGuard(clean) : clean;
+  const bubbles = splitIntoBubbles(polished, env.MAX_BUBBLES);
 
   for (const [index, bubble] of bubbles.entries()) {
     await typeFor(ctx, randomBetween(env.TYPING_MS_MIN, env.TYPING_MS_MAX));

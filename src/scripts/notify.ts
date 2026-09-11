@@ -5,10 +5,15 @@
  *   npm run notify vip-link -- --dry-run  # mostra sem enviar
  *   npm run notify vip-link               # envia
  *
+ * Tambem envia uma mensagem avulsa a um so lead:
+ *
+ *   npm run notify -- --user 7691672875 --message "oi" --dry-run
+ *   npm run notify -- --user 7691672875 --message "oi"
+ *
  * Em producao, onde o build ja correu, dispensa o tsx:
  *
  *   node dist/scripts/notify.js vip-link --dry-run
- *   node dist/scripts/notify.js vip-link
+ *   node dist/scripts/notify.js --user 7691672875 --message "oi"
  *
  * Cada campanha e enviada uma vez so por destinatario: os envios ficam num
  * recibo em disco, com a campanha na chave. Correr o script duas vezes por
@@ -120,21 +125,110 @@ function listCampaigns(): void {
   }
   console.log('Uso: npm run notify <campanha> [-- --dry-run]');
   console.log('     node dist/scripts/notify.js <campanha> [--dry-run]');
+  console.log('');
+  console.log('Mensagem avulsa a um lead:');
+  console.log('     npm run notify -- --user <ID> --message "<TEXTO>" [--dry-run]');
+}
+
+/** Le o valor de um argumento no formato `--chave valor`. */
+function readFlag(args: string[], name: string): string | undefined {
+  const index = args.indexOf(`--${name}`);
+  if (index === -1) return undefined;
+
+  const value = args[index + 1];
+  // Um valor que comeca por `--` e a flag seguinte, nao o valor desta.
+  return value === undefined || value.startsWith('--') ? undefined : value;
+}
+
+/**
+ * Envio avulso: um destinatario, um texto vindo da linha de comandos.
+ *
+ * Ao contrario das campanhas, nao bloqueia repeticoes. Uma campanha e um
+ * disparo unico por lista; uma mensagem escrita a mao pode legitimamente
+ * repetir-se numa conversa. Fica na mesma no recibo, para haver rasto.
+ */
+async function sendDirect(api: Api, args: string[], dryRun: boolean): Promise<never> {
+  const rawUser = readFlag(args, 'user');
+  const text = readFlag(args, 'message');
+
+  if (!rawUser) {
+    console.error('Falta o --user <ID>.');
+    process.exit(1);
+  }
+
+  const chatId = Number(rawUser);
+
+  // Um ID mal escrito nao da erro: entrega a mensagem a um desconhecido.
+  if (!Number.isSafeInteger(chatId)) {
+    console.error(`--user "${rawUser}" nao e um ID de Telegram valido.`);
+    process.exit(1);
+  }
+
+  if (!text || text.trim().length === 0) {
+    console.error('Falta o --message "<TEXTO>".');
+    process.exit(1);
+  }
+
+  // O Telegram rejeita acima de 4096 caracteres; melhor falhar aqui.
+  if (text.length > 4096) {
+    console.error(`Mensagem com ${text.length} caracteres, o limite do Telegram e 4096.`);
+    process.exit(1);
+  }
+
+  console.log(`Destino:  ${chatId}`);
+  console.log(`Modo:     ${dryRun ? 'DRY RUN (nao envia)' : 'ENVIO REAL'}`);
+  console.log(`Texto:    ${text}\n`);
+
+  if (dryRun) {
+    console.log('  ENVIARIA  mensagem acima');
+    process.exit(0);
+  }
+
+  try {
+    const message = await api.sendMessage(chatId, text, {
+      link_preview_options: { is_disabled: true },
+    });
+
+    appendReceipt({
+      campaign: 'avulso',
+      chatId,
+      name: 'avulso',
+      sentAt: new Date().toISOString(),
+      messageId: message.message_id,
+    });
+
+    console.log(`  ENVIADO   ${chatId} — message_id ${message.message_id}`);
+    console.log(`Recibo: ${RECEIPT_PATH}`);
+    process.exit(0);
+  } catch (error) {
+    const description = error instanceof GrammyError ? error.description : String(error);
+    console.error(`  FALHOU    ${chatId} — ${description}`);
+    process.exit(1);
+  }
 }
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
-  const campaignId = args.find((arg) => !arg.startsWith('--'));
+  const direct = args.includes('--user') || args.includes('--message');
 
-  if (!campaignId) {
+  // Os valores das flags nao sao nomes de campanha: sem isto, o `123` de
+  // `--user 123` passaria por campanha e o script rejeitava-o.
+  const flagValues = new Set(
+    ['user', 'message']
+      .map((name) => readFlag(args, name))
+      .filter((value): value is string => value !== undefined),
+  );
+  const campaignId = args.find((arg) => !arg.startsWith('--') && !flagValues.has(arg));
+
+  if (!direct && !campaignId) {
     listCampaigns();
     process.exit(0);
   }
 
-  const campaign = CAMPAIGNS.find((entry) => entry.id === campaignId);
+  const campaign = direct ? undefined : CAMPAIGNS.find((entry) => entry.id === campaignId);
 
-  if (!campaign) {
+  if (!direct && !campaign) {
     console.error(`Campanha "${campaignId}" nao existe.\n`);
     listCampaigns();
     process.exit(1);
@@ -154,6 +248,12 @@ async function main(): Promise<void> {
   // influencer errado.
   const me = await api.getMe();
   console.log(`Bot:      @${me.username} (${me.id})`);
+
+  if (direct) await sendDirect(api, args, dryRun);
+
+  // A partir daqui e sempre uma campanha: o ramo avulso acima nunca retorna.
+  if (!campaign) process.exit(1);
+
   console.log(`Campanha: ${campaign.id} — ${campaign.description}`);
   console.log(`Modo:     ${dryRun ? 'DRY RUN (nao envia)' : 'ENVIO REAL'}\n`);
 

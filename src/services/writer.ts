@@ -220,6 +220,46 @@ export function linkAllowed(turn: number, stage: SalesDirective['stage']): boole
   return !early || turn >= 5;
 }
 
+/**
+ * O que ja se sabe do lead, e portanto o que nunca mais se pergunta.
+ *
+ * O bloco existe porque a regra "nao repitas perguntas" so por si nao chega:
+ * o redator escreve a partir da diretriz, nao do historico completo, e sem
+ * esta lista explicita volta a perguntar o que ja foi respondido.
+ */
+function buildKnownRule(lead: Lead): string {
+  const lines: string[] = [];
+
+  if (lead.canton) {
+    lines.push(
+      `O lead vive em ${lead.canton}. JA TE DISSE ISTO: e PROIBIDO voltar a ` +
+        'perguntar onde mora, em que cantao ou em que zona, mesmo por outras ' +
+        'palavras.',
+    );
+  }
+
+  if (lead.bettingExperience) {
+    lines.push(
+      lead.bettingExperience === 'iniciante'
+        ? 'O lead JA TE DISSE que esta a comecar nas apostas. E PROIBIDO voltar ' +
+          'a perguntar se ja apostou. Explica com calma, sem termos tecnicos e ' +
+          'sem o fazer sentir perdido.'
+        : 'O lead JA TE DISSE que ja aposta. E PROIBIDO voltar a perguntar se ja ' +
+          'apostou ou se percebe disto. Fala de igual para igual, sem explicar o ' +
+          'obvio.',
+    );
+  }
+
+  if (lead.canton && lead.bettingExperience) {
+    lines.push(
+      'A QUALIFICACAO ACABOU. Nada de perguntas sobre ele: a conversa agora e ' +
+        'de parceiro, e o que procuras e a decisao dele sobre entrar no grupo.',
+    );
+  }
+
+  return lines.join('\n');
+}
+
 function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number): string {
   const sendLink = directive.includeLink && linkAllowed(turn, directive.stage);
 

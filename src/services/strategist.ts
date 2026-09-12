@@ -55,6 +55,11 @@ export interface SalesDirective {
    * Serve para gravar, nunca para justificar repetir a pergunta.
    */
   canton: string;
+  /**
+   * "experiente" ou "iniciante", se o lead o disser NESTA mensagem; "" caso
+   * contrario. Serve para gravar, nunca para justificar repetir a pergunta.
+   */
+  bettingExperience: string;
   /** Se true, o link de afiliado deve aparecer na resposta. */
   includeLink: boolean;
   /** Fatos que valem guardar sobre o lead (memoria de longo prazo). */
@@ -86,6 +91,12 @@ const responseSchema: Schema = {
       type: Type.STRING,
       description: 'Hora HH:MM que o lead deu para tratar do deposito, ou vazio',
     },
+    bettingExperience: {
+      type: Type.STRING,
+      description:
+        'Se o lead disse NESTA mensagem que ja aposta ou que esta a comecar: ' +
+        '"experiente" ou "iniciante". Vazio se nao disse nada sobre isso.',
+    },
     canton: {
       type: Type.STRING,
       description: 'Cantao ou cidade da Suica que o lead indicou nesta mensagem, ou vazio',
@@ -105,6 +116,7 @@ const responseSchema: Schema = {
     'profile',
     'promisedTime',
     'canton',
+    'bettingExperience',
     'includeLink',
     'notes',
     'shouldStop',
@@ -128,11 +140,14 @@ O QUE SE VENDE NESTA FASE:
 
 SEQUENCIA DE ABORDAGEM — a ordem importa mais do que o argumento:
 
-TURNOS 1-2 — RAPPORT E QUALIFICACAO
-- So conversa. Uma ou duas destas, nunca as tres de uma vez:
+TURNOS 1-2 — FASE 1, QUALIFICACAO (uma vez so, nunca mais)
+- A fase 1 serve para saber DUAS coisas, e mais nada:
   · em que cantao da Suica esta a morar (VER A REGRA DO CANTAO ABAIXO)
-  · ha quanto tempo esta na Suica
   · se ja costuma apostar em futebol ou esta a comecar agora
+- UMA de cada vez, no meio da conversa, nunca as duas na mesma mensagem e
+  nunca em forma de formulario.
+- Assim que tiveres as duas respostas, a fase 1 ACABOU e nunca mais se repete.
+  O bloco "FASE ACTUAL" do contexto diz-te em que fase estas: obedece-lhe.
 - Usa a resposta para criar proximidade de emigrante — quem esta longe de casa
   reconhece quem tambem esta. Sem forcar.
 - PROIBIDO falar de registo, deposito, link, valores ou ${env.PLATFORM_NAME}.
@@ -188,12 +203,36 @@ REGRA DO CANTAO — le o campo "cantao" do CONTEXTO DO LEAD:
 - Preenche o campo "canton" da diretriz APENAS quando ele indicar a
   localizacao nesta mensagem. Nos outros turnos deixa vazio.
 
+REGRA DA EXPERIENCIA — le o campo "experiencia com apostas" do CONTEXTO:
+- Se tiver um valor, o lead JA RESPONDEU. E ESTRITAMENTE PROIBIDO voltar a
+  perguntar, de qualquer forma, incluindo "ja tinhas apostado antes?" ou "isto
+  e novo para ti?". Usa o que ja sabes: a um iniciante explicas com calma, a um
+  experiente falas de igual para igual.
+- Preenche o campo "bettingExperience" da diretriz APENAS quando ele disser
+  isso NESTA mensagem. Nos outros turnos deixa vazio.
+
+FASE 2 — CONEXAO E FECHO (depois da qualificacao)
+- Com o cantao e a experiencia sabidos, a qualificacao esta encerrada. O tom
+  passa a ser de parceiro, nao de vendedor: amigavel, natural, proximo.
+- O que a diretriz procura em cada turno e A DECISAO DELE sobre entrar no grupo
+  VIP, conduzida por perguntas naturais e nao por pressao:
+  · se ja pensou bem em entrar na equipa hoje
+  · o que e que o esta a prender para darem esse passo
+  · se tem alguma duvida sobre como funcionam os sinais
+- Duvida levantada e duvida tratada, e depois volta-se a decisao. Tratar a
+  duvida e ficar por ai e uma conversa que morre.
+- Isto nao atropela a SEQUENCIA acima: a condicao de entrada e o link continuam
+  a sair na ordem que la esta. A fase 2 muda o TOM e o FOCO, nao a ordem.
+
 CONTINUIDADE — o funil nao recomeca:
 - Se o lead ja disse o cantao e agora responde outra coisa qualquer ("es top",
   "fixe", "ya"), isso NAO e razao para voltar a saudacoes nem a perguntas de
   residencia. Avanca para o passo seguinte do funil.
+- Se ele reaparecer com um "oi" ou "boas" depois de um tempo calado,
+  cumprimenta em duas palavras e vai DIRECTO ao ponto que ficou em aberto sobre
+  a entrada no grupo. Nunca recomeces o funil nem a qualificacao.
 - Nunca repitas uma pergunta ja respondida no historico. Reler o historico
-  antes de perguntar seja o que for e obrigatorio.
+  COMPLETO antes de perguntar seja o que for e obrigatorio.
 
 REGRA DE OURO DESTA FASE:
 - NAO divulgues o casino como produto, nem trates o registo como o objetivo.
@@ -358,10 +397,79 @@ function fallbackDirective(lead: Lead): SalesDirective {
     profile: 'indefinido',
     promisedTime: '',
     canton: '',
+    bettingExperience: '',
     includeLink: false,
     notes: '',
     shouldStop: false,
   };
+}
+
+/**
+ * Em que fase do funil esta a conversa, decidido em codigo e nao pelo modelo.
+ *
+ * A fase 1 e so a qualificacao: cantao e experiencia com apostas. Assim que as
+ * duas respostas estiverem guardadas, a conversa passa a fase 2 e essas
+ * perguntas ficam proibidas.
+ *
+ * Isto e calculado a partir do que esta na base de dados, e nao deixado ao
+ * criterio do modelo a ler o historico, porque foi exactamente essa a falha
+ * que fez o bot voltar a perguntar o cantao a quem ja o tinha dito. O modelo
+ * esquece-se; uma coluna preenchida nao.
+ */
+export function phaseBlock(
+  lead: Pick<Lead, 'canton' | 'bettingExperience'>,
+  history: StoredMessage[],
+): string {
+  const hasCanton = Boolean(lead.canton);
+  const hasExperience = Boolean(lead.bettingExperience);
+
+  // Valvula de escape: o que o lead nao disse ao fim de alguns turnos e porque
+  // nao quis dizer, e insistir transforma a conversa num interrogatorio. A fase
+  // avanca na mesma, com o que se souber.
+  //
+  // Sao cinco turnos e nao tres porque as perguntas da fase 1 sao duas e saem
+  // uma de cada vez, intercaladas com conversa: com o corte mais cedo, quem
+  // respondesse ao cantao ao segundo turno passava a fase 2 sem a segunda
+  // pergunta ter chegado a ser feita.
+  const turn = history.filter((message) => message.role === 'user').length + 1;
+  const qualificationOver = (hasCanton && hasExperience) || turn >= 5;
+
+  if (!qualificationOver) {
+    const missing = [
+      hasCanton ? null : 'o cantao da Suica onde mora',
+      hasExperience ? null : 'se ja costuma apostar ou se esta a comecar agora',
+    ].filter((item): item is string => item !== null);
+
+    return `FASE ACTUAL: 1 — QUALIFICACAO
+Falta saber: ${missing.join(' e ')}.
+- Pergunta UMA de cada vez, no meio da conversa, nunca as duas na mesma
+  mensagem e nunca como formulario.
+${hasCanton ? '- O cantao JA ESTA SABIDO. PROIBIDO voltar a perguntar onde mora, de qualquer forma.\n' : ''}${hasExperience ? '- A experiencia JA ESTA SABIDA. PROIBIDO voltar a perguntar se ja aposta.\n' : ''}- Assim que tiveres as duas respostas, a conversa passa a fase 2 sozinha.`;
+  }
+
+  return `FASE ACTUAL: 2 — CONEXAO E FECHO
+A qualificacao ACABOU. E ESTRITAMENTE PROIBIDO, em qualquer forma ou pretexto,
+voltar a perguntar:
+  · onde mora, em que cantao, em que zona, ha quanto tempo esta na Suica
+  · se ja aposta, se percebe de apostas, se e a primeira vez
+Ja sabes: cantao ${lead.canton ?? '(nao quis dizer)'}, experiencia ${lead.bettingExperience ?? '(nao quis dizer)'}.
+Usa isso para criar proximidade, nao para reabrir o assunto.
+
+O QUE FAZES AGORA:
+- Conversa de parceiro, nao de vendedor. Amigavel, natural, proxima. Es alguem
+  em quem ele confia, e nao alguem que lhe esta a tentar tirar dinheiro.
+- O objetivo do turno e DESCOBRIR A DECISAO DELE sobre entrar no grupo VIP, e
+  conduzir ao fecho. Perguntas assim, pelas tuas palavras:
+  · "e entao mano, ja pensaste bem se vais querer entrar na equipa hoje?"
+  · "o que e que te esta a prender para darmos esse passo e comecarmos a
+     faturar no VIP?"
+  · "tens alguma duvida sobre como funcionam os sinais, ou podemos tratar
+     disso ja?"
+- Se ele levantar uma duvida, trata a duvida e volta a perguntar a decisao. A
+  duvida tratada sem voltar ao fecho e uma conversa que morre.
+- Se ele retomar do nada ("oi", "boas", "tas ai?"), cumprimenta em duas
+  palavras e vai DIRECTO ao ponto que ficou em aberto sobre a entrada. Nunca
+  recomeces o funil.`;
 }
 
 /**
@@ -381,8 +489,11 @@ export function buildPrompt(params: {
 - nome: ${lead.firstName ?? 'desconhecido'}
 - estagio atual: ${lead.stage}
 - cantao: ${lead.canton ?? 'desconhecido'}
+- experiencia com apostas: ${lead.bettingExperience ?? 'desconhecida'}
 - TURNO NUMERO: ${history.filter((m) => m.role === 'user').length + 1} (usa a SEQUENCIA DE ABORDAGEM)
 - anotacoes anteriores: ${lead.notes ?? '(nenhuma)'}
+
+${phaseBlock(lead, history)}
 
 HISTORICO RECENTE
 ${renderHistory(history)}
@@ -474,6 +585,7 @@ async function requestDirective(params: {
         ? String(parsed.promisedTime)
         : '',
       canton: text(parsed.canton, ''),
+      bettingExperience: text(parsed.bettingExperience, ''),
       includeLink: parsed.includeLink === true,
       notes: text(parsed.notes, ''),
       shouldStop: parsed.shouldStop === true,

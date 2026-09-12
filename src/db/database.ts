@@ -52,6 +52,13 @@ export interface Lead {
   promiseNote: string | null;
   /** Cantao onde vive, assim que o disser. Null enquanto nao se souber. */
   canton: string | null;
+  /**
+   * Se ja aposta ou se esta a comecar. Null enquanto nao se souber.
+   *
+   * Guardado pela mesma razao do cantao: e este campo, e nao a memoria do
+   * modelo, que impede a pergunta de voltar a ser feita.
+   */
+  bettingExperience: string | null;
   firstName: string | null;
   username: string | null;
   languageCode: string | null;
@@ -119,6 +126,7 @@ interface LeadRow {
   promised_at: string | null;
   promise_note: string | null;
   canton: string | null;
+  betting_experience: string | null;
   first_name: string | null;
   username: string | null;
   language_code: string | null;
@@ -220,6 +228,7 @@ addColumnIfMissing('leads', 'canton', 'TEXT');
 // isto o filtro por `updated_at` so adiava, e passada a janela a pessoa que ja
 // tinha respondido voltava a entrar na lista.
 addColumnIfMissing('leads', 'remarketing_cancelled', 'INTEGER NOT NULL DEFAULT 0');
+addColumnIfMissing('leads', 'betting_experience', 'TEXT');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS remarketing_runs (
@@ -277,6 +286,7 @@ function mapLead(row: LeadRow): Lead {
     promisedAt: row.promised_at,
     promiseNote: row.promise_note,
     canton: row.canton,
+    bettingExperience: row.betting_experience,
     firstName: row.first_name,
     username: row.username,
     languageCode: row.language_code,
@@ -369,6 +379,10 @@ const statements = {
   setCanton: db.prepare(`
     UPDATE leads SET canton = ?, updated_at = datetime('now')
      WHERE chat_id = ? AND (canton IS NULL OR canton = '')
+  `),
+  setBettingExperience: db.prepare(`
+    UPDATE leads SET betting_experience = ?, updated_at = datetime('now')
+     WHERE chat_id = ? AND (betting_experience IS NULL OR betting_experience = '')
   `),
   setPromise: db.prepare(`
     UPDATE leads SET promised_at = ?, promise_note = ?, updated_at = datetime('now')
@@ -704,6 +718,11 @@ export function getDuePromises(nowUtc: string, limit: number): Lead[] {
  */
 export function setCanton(chatId: number, canton: string): void {
   statements.setCanton.run(canton, chatId);
+}
+
+/** A primeira resposta e a boa: escritas seguintes sao ignoradas no SQL. */
+export function setBettingExperience(chatId: number, experience: string): void {
+  statements.setBettingExperience.run(experience, chatId);
 }
 
 export function getStats(): FunnelStats {

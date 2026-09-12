@@ -11,6 +11,7 @@ import {
   clearDepositPromise,
   getStats,
   recordDepositProof,
+  setBettingExperience,
   setCanton,
   setDepositPromise,
   setNotes,
@@ -23,6 +24,7 @@ import { writeReply } from '../services/writer';
 import { createLogger } from '../utils/logger';
 import { sanitiseDashes } from '../utils/text';
 import { detectCanton } from '../utils/canton';
+import { detectBettingExperience } from '../utils/experience';
 import { nextOccurrenceUtc } from '../utils/timezone';
 
 const log = createLogger('telegram');
@@ -306,6 +308,31 @@ function recordCanton(
 }
 
 /**
+ * Guarda se o lead ja aposta ou esta a comecar, pelas mesmas razoes do cantao:
+ * e o campo guardado, e nao a memoria do modelo, que trava a repeticao da
+ * pergunta na fase 2.
+ *
+ * A escrita e ignorada se ja houver resposta: a primeira e a boa.
+ */
+function recordExperience(
+  chatId: number,
+  known: string | null,
+  incoming: string,
+  directive: SalesDirective,
+): void {
+  if (known) return;
+
+  // A leitura em codigo tem prioridade sobre a do modelo, que tanto pode
+  // devolver "iniciante" como "nunca apostou" ou uma frase inteira.
+  const detected =
+    detectBettingExperience(incoming) ?? detectBettingExperience(directive.bettingExperience);
+  if (!detected) return;
+
+  setBettingExperience(chatId, detected);
+  log.info(`experiencia registada chat=${chatId} -> ${detected}`);
+}
+
+/**
  * Guarda a hora combinada com o lead, convertida do fuso dele para UTC. Uma
  * hora ja passada e do dia seguinte: quem diz "as 18h" as 19h esta a falar de
  * amanha, nao de ha uma hora.
@@ -395,6 +422,7 @@ async function runFunnelTurn(
       advanceStage(chatId, directive.shouldStop ? 'perdido' : directive.stage);
       recordPromise(chatId, directive);
       recordCanton(chatId, current.canton, incoming, directive);
+      recordExperience(chatId, current.bettingExperience, incoming, directive);
 
       if (directive.notes.trim().length > 0) {
         const merged = [current.notes, directive.notes.trim()]

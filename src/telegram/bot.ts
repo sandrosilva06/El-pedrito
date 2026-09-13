@@ -4,6 +4,7 @@ import { env } from '../config/env';
 import {
   addMessage,
   advanceStage,
+  claimUpdate,
   cancelRemarketing,
   clearHistory,
   forgetLead,
@@ -30,6 +31,30 @@ import { nextOccurrenceUtc } from '../utils/timezone';
 const log = createLogger('telegram');
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
+
+/**
+ * Primeira barreira de todas: um update so e processado uma vez.
+ *
+ * O Telegram reenvia o update quando nao recebe o 200 a tempo, e no Render
+ * isso acontece sempre que o servico acorda de hibernacao — a primeira
+ * entrega apanha o arranque a frio e esgota o prazo. Sem isto, o mesmo /start
+ * corria duas vezes: ou saiam duas saudacoes, ou saia a saudacao e logo a
+ * seguir a resposta de quem volta, porque a segunda passagem ja encontrava a
+ * primeira gravada. Visto do telemovel, o bot parecia recomecar sozinho.
+ *
+ * Tem de ser o primeiro middleware: a partir daqui nenhum handler corre para
+ * um update repetido.
+ */
+bot.use(async (ctx, next) => {
+  const updateId = ctx.update.update_id;
+
+  if (!claimUpdate(updateId)) {
+    log.warn(`update ${updateId} repetido pelo Telegram, ignorado`);
+    return;
+  }
+
+  await next();
+});
 
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 const MAX_INCOMING_LENGTH = 2000;

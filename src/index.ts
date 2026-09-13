@@ -4,7 +4,7 @@ import express from 'express';
 import { webhookCallback } from 'grammy';
 
 import { env, isProduction } from './config/env';
-import { closeDatabase, getStats } from './db/database';
+import { closeDatabase, getStats, pruneProcessedUpdates } from './db/database';
 import { startRemarketingScheduler, stopRemarketingScheduler } from './scheduler/remarketing';
 import { BOT_COMMANDS, bot } from './telegram/bot';
 import { createLogger } from './utils/logger';
@@ -118,6 +118,12 @@ async function start(): Promise<void> {
   server = app.listen(env.PORT, () => {
     log.info(`HTTP ouvindo na porta ${env.PORT}`);
   });
+
+  // A tabela de updates processados existe para nao repetir entregas, nao para
+  // guardar historia. Podada no arranque e uma vez por hora.
+  pruneProcessedUpdates();
+  const prune = setInterval(() => pruneProcessedUpdates(), 60 * 60 * 1000);
+  prune.unref();
 
   if (env.modeSource === 'forcado-em-producao') {
     log.warn(

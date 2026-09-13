@@ -230,6 +230,25 @@ addColumnIfMissing('leads', 'canton', 'TEXT');
 addColumnIfMissing('leads', 'remarketing_cancelled', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('leads', 'betting_experience', 'TEXT');
 
+/**
+ * Updates do Telegram ja processados.
+ *
+ * Quando o servico demora a responder — no Render acontece sempre que acorda
+ * de hibernacao — o Telegram nao recebe o 200 a tempo e REENVIA o mesmo
+ * update. Sem esta marca, o mesmo /start era processado duas vezes e o lead
+ * recebia a conversa a dobrar, ou a saudacao seguida da resposta de quem
+ * volta.
+ *
+ * Fica em disco e nao em memoria de proposito: o reenvio acontece justamente
+ * a volta de um reinicio, que e quando a memoria se perde.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS processed_updates (
+    update_id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS remarketing_runs (
     slot       TEXT NOT NULL,
@@ -375,6 +394,13 @@ const statements = {
        -- depois arrefecer.
        AND last_remarketing_at IS NOT NULL
        AND remarketing_cancelled = 0
+  `),
+  claimUpdate: db.prepare('INSERT OR IGNORE INTO processed_updates (update_id) VALUES (?)'),
+  pruneUpdates: db.prepare(`
+    DELETE FROM processed_updates
+     WHERE update_id NOT IN (
+       SELECT update_id FROM processed_updates ORDER BY update_id DESC LIMIT ?
+     )
   `),
   setCanton: db.prepare(`
     UPDATE leads SET canton = ?, updated_at = datetime('now')
@@ -716,6 +742,22 @@ export function getDuePromises(nowUtc: string, limit: number): Lead[] {
  * resposta e a boa, e uma mencao de passagem a outra cidade mais a frente
  * ("o meu primo esta em Genebra") nao pode mudar onde ele mora.
  */
+/**
+ * Marca o update como processado. Devolve true so a primeira vez.
+ *
+ * O INSERT e a propria verificacao: fazer SELECT e depois INSERT deixaria uma
+ * fresta entre os dois por onde passa o reenvio que chega ao mesmo tempo.
+ */
+export function claimUpdate(updateId: number): boolean {
+  const result = statements.claimUpdate.run(updateId);
+  return result.changes > 0;
+}
+
+/** Guarda so os ultimos updates: a tabela existe para dedup, nao para historia. */
+export function pruneProcessedUpdates(keep = 5000): void {
+  statements.pruneUpdates.run(keep);
+}
+
 export function setCanton(chatId: number, canton: string): void {
   statements.setCanton.run(canton, chatId);
 }

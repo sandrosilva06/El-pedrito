@@ -246,18 +246,54 @@ bot.command('start', async (ctx) => {
   const lead = leadFromContext(ctx);
   if (!lead) return;
 
-  const history = getRecentMessages(lead.chatId, 1);
+  const history = getRecentMessages(lead.chatId, 20);
 
   /**
-   * Dois sinais, e nao um, para decidir se o lead ja ca esteve.
+   * Tres situacoes diferentes, e nao duas.
    *
-   * O historico e o sinal principal. O estagio e a rede de seguranca: um lead
-   * que mandou um comprovativo antes de escrever, ou cujo historico foi
-   * limpo por retencao, tem o estagio adiantado e nao pode levar a
-   * apresentacao de quem chega agora. Perante a duvida, trata-se como
-   * conhecido, porque o erro caro e o outro.
+   * Receber a saudacao nao e ter conversado. Quem carrega em /start duas vezes
+   * seguidas, ou carrega no botao START do Telegram e volta a carregar porque
+   * a resposta demora, tem a saudacao ja gravada mas nunca disse nada. Tratar
+   * isso como "lead que volta" fazia o bot perguntar-lhe se ja tinha decidido
+   * entrar, a alguem a quem ainda nao foi proposto nada.
+   *
+   * O que marca uma conversa a serio e o lead ter FALADO, ou ter passado da
+   * qualificacao (um comprovativo enviado adianta o estagio sem passar por
+   * texto, e o historico pode ter sido apagado por retencao).
    */
-  const isReturning = history.length > 0 || lead.stage !== 'novo';
+  const hasHistory = history.length > 0;
+  const hasSpoken = history.some((message) => message.role === 'user');
+
+  /**
+   * Saudado ha pouco e ainda calado: e o mesmo /start outra vez, nao um
+   * regresso. A resposta ja vai a caminho (a entrega ritmada leva dezenas de
+   * segundos e o lead carrega outra vez porque acha que falhou), por isso o
+   * melhor e nao fazer nada. Repetir a saudacao dava conversa a dobrar, e
+   * tratar como regresso perguntava a decisao a quem acabou de chegar.
+   *
+   * O historico vem por ordem crescente, portanto a ultima entrada e a mais
+   * recente.
+   */
+  const lastMessage = history[history.length - 1];
+
+  if (
+    hasHistory &&
+    !hasSpoken &&
+    lastMessage !== undefined &&
+    Date.now() - Date.parse(`${lastMessage.createdAt.replace(' ', 'T')}Z`) < DOUBLE_START_WINDOW_MS
+  ) {
+    log.info(`/start repetido chat=${lead.chatId} — saudacao ja a caminho, ignorado`);
+    return;
+  }
+
+  /**
+   * Fora esse caso, quem tem historico nunca volta ao inicio, tenha falado ou
+   * nao. O estagio entra como rede para quem nao tem historico legivel: um
+   * comprovativo enviado adianta o estagio sem passar por texto, e o historico
+   * pode ter sido apagado por retencao.
+   */
+  const pastQualification = lead.stage !== 'novo' && lead.stage !== 'qualificacao';
+  const isReturning = hasHistory || pastQualification;
 
   // Quem ja falou connosco nao volta ao inicio. Repetir a apresentacao a quem
   // ja passou pela qualificacao trata-o como um desconhecido e deita fora o
@@ -413,6 +449,14 @@ function recordPromise(chatId: number, directive: SalesDirective): void {
  * sem nunca ter falado.
  */
 const RETURNING_MARKER = '[o lead voltou e carregou em /start; nao escreveu nada de novo]';
+
+/**
+ * Dentro desta janela, um /start a seguir a saudacao e a mesma pessoa a
+ * carregar outra vez porque a resposta demora, e nao alguem que voltou. Larga
+ * o suficiente para cobrir a entrega ritmada de varias bolhas, curta o
+ * suficiente para quem volta mais tarde ser atendido.
+ */
+const DOUBLE_START_WINDOW_MS = 10 * 60 * 1000;
 
 /**
  * Um turno do funil: le o historico, corre a cadeia estrategista -> redator,

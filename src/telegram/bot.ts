@@ -59,6 +59,31 @@ function enqueue(chatId: number, task: () => Promise<void>): Promise<void> {
   return next;
 }
 
+/**
+ * Geracao da conversa de cada chat.
+ *
+ * O /parar e o /reset apagam a conversa no instante em que chegam, mas um
+ * turno que ja esteja em curso ou a espera na fila so termina depois. Ao
+ * terminar, voltava a criar o lead, gravava a resposta e enviava-a, por cima
+ * de quem tinha acabado de pedir para nao ser incomodado. O lead ficava
+ * ressuscitado, e o /start seguinte tratava-o como conhecido em vez de lhe dar
+ * as boas-vindas.
+ *
+ * Cada turno guarda a geracao com que entrou e desiste se ela mudar pelo
+ * caminho. So aqui ficam os chats que alguma vez pararam, por isso o mapa nao
+ * cresce com o numero de leads.
+ */
+const chatGenerations = new Map<number, number>();
+
+function currentGeneration(chatId: number): number {
+  return chatGenerations.get(chatId) ?? 0;
+}
+
+/** Invalida o que estiver em curso ou em fila para este chat. */
+function invalidateChat(chatId: number): void {
+  chatGenerations.set(chatId, currentGeneration(chatId) + 1);
+}
+
 /** Rate limit simples em memoria, por chat. */
 const rateBuckets = new Map<number, number[]>();
 
@@ -164,13 +189,27 @@ async function typeFor(ctx: Context, totalMs: number): Promise<void> {
  * Um bloco unico entregue de golpe denuncia o bot mais depressa do que
  * qualquer erro de portugues — ninguem escreve quatro frases num instante.
  */
-async function sendHumanPaced(ctx: Context, text: string): Promise<void> {
+async function sendHumanPaced(
+  ctx: Context,
+  text: string,
+  /**
+   * Verificado antes de cada balao. A entrega demora dezenas de segundos, e
+   * sem isto um /parar a meio ainda deixava sair as bolhas seguintes: o lead
+   * pedia para parar e continuava a receber mensagens.
+   */
+  shouldAbort?: () => boolean,
+): Promise<void> {
   // Ultima barreira antes do Telegram. O redator ja limpa o que gera, mas por
   // aqui passa tambem texto que ele nao escreveu — o aviso legal, o link e as
   // mensagens fixas vindas do ambiente.
   const bubbles = splitIntoBubbles(sanitiseDashes(text), env.MAX_BUBBLES);
 
   for (const [index, bubble] of bubbles.entries()) {
+    if (shouldAbort?.()) {
+      log.info(`entrega ao chat ${ctx.chat?.id} interrompida: a conversa foi apagada`);
+      return;
+    }
+
     await typeFor(ctx, randomBetween(env.TYPING_MS_MIN, env.TYPING_MS_MAX));
 
     for (const chunk of splitMessage(bubble)) {
@@ -256,6 +295,7 @@ bot.command('reset', async (ctx) => {
   const lead = leadFromContext(ctx);
   if (!lead) return;
 
+  invalidateChat(lead.chatId);
   clearHistory(lead.chatId);
   setNotes(lead.chatId, null);
   await ctx.reply('Pronto, limpei a nossa conversa. Diz-me o que queres saber.');
@@ -265,6 +305,9 @@ bot.command('parar', async (ctx) => {
   const chatId = ctx.chat?.id;
   if (chatId === undefined) return;
 
+  // Antes de apagar: o que estiver em fila fica invalido e nao volta a gravar
+  // nada nem a falar com quem pediu para parar.
+  invalidateChat(chatId);
   forgetLead(chatId);
   await ctx.reply(
     'Sem problema, não te volto a incomodar. Apaguei a nossa conversa. ' +
@@ -381,7 +424,16 @@ const RETURNING_MARKER = '[o lead voltou e carregou em /start; nao escreveu nada
  * HTTP. Passa pela fila do chat para nao se cruzar com um turno em curso.
  */
 function dispatchMessage(ctx: Context, chatId: number, text: string): void {
-  void enqueue(chatId, () => sendHumanPaced(ctx, text)).catch((error: unknown) => {
+  const generation = currentGeneration(chatId);
+
+  void enqueue(chatId, async () => {
+    if (currentGeneration(chatId) !== generation) {
+      log.info(`mensagem ao chat ${chatId} descartada: a conversa foi apagada entretanto`);
+      return;
+    }
+
+    await sendHumanPaced(ctx, text, () => currentGeneration(chatId) !== generation);
+  }).catch((error: unknown) => {
     log.error(`falha ao entregar mensagem ao chat ${chatId}`, error);
   });
 }
@@ -412,7 +464,17 @@ async function runFunnelTurn(
   incoming: string,
   options: { storeIncoming: boolean },
 ): Promise<void> {
+  // Lida ANTES de entrar na fila: e a geracao do momento em que o lead falou,
+  // e nao a de quando o turno chegar a sua vez.
+  const generation = currentGeneration(chatId);
+
   await enqueue(chatId, async () => {
+    // A conversa foi apagada enquanto este turno esperava na fila.
+    if (currentGeneration(chatId) !== generation) {
+      log.info(`turno do chat ${chatId} descartado: a conversa foi apagada entretanto`);
+      return;
+    }
+
     const stopTyping = keepTyping(ctx);
 
     try {
@@ -423,6 +485,14 @@ async function runFunnelTurn(
 
       const directive = await planStrategy({ lead: current, history, incoming });
       const answer = await writeReply({ lead: current, history, incoming, directive });
+
+      // As duas chamadas acima levam segundos, e o /parar pode ter chegado no
+      // meio delas. Verifica-se outra vez antes de gravar seja o que for: a
+      // partir daqui e que se escreve na base de dados e se fala com o lead.
+      if (currentGeneration(chatId) !== generation) {
+        log.info(`resposta ao chat ${chatId} descartada: a conversa foi apagada entretanto`);
+        return;
+      }
 
       if (options.storeIncoming) {
         addMessage({ chatId, role: 'user', content: incoming });
@@ -448,7 +518,7 @@ async function runFunnelTurn(
       }
 
       stopTyping();
-      await sendHumanPaced(ctx, answer);
+      await sendHumanPaced(ctx, answer, () => currentGeneration(chatId) !== generation);
 
       log.info(`respondido chat=${chatId} estagio=${directive.stage}`);
     } finally {

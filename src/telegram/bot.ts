@@ -209,20 +209,36 @@ bot.command('start', async (ctx) => {
 
   const history = getRecentMessages(lead.chatId, 1);
 
+  /**
+   * Dois sinais, e nao um, para decidir se o lead ja ca esteve.
+   *
+   * O historico e o sinal principal. O estagio e a rede de seguranca: um lead
+   * que mandou um comprovativo antes de escrever, ou cujo historico foi
+   * limpo por retencao, tem o estagio adiantado e nao pode levar a
+   * apresentacao de quem chega agora. Perante a duvida, trata-se como
+   * conhecido, porque o erro caro e o outro.
+   */
+  const isReturning = history.length > 0 || lead.stage !== 'novo';
+
   // Quem ja falou connosco nao volta ao inicio. Repetir a apresentacao a quem
   // ja passou pela qualificacao trata-o como um desconhecido e deita fora o
   // trabalho todo da conversa anterior — alem de soar a robo, que e
   // exatamente o que este funil evita.
-  if (history.length > 0) {
+  if (isReturning) {
     if (isRateLimited(lead.chatId)) {
       log.warn(`rate limit atingido pelo chat ${lead.chatId} (/start)`);
       return;
     }
 
-    log.info(`/start de lead recorrente chat=${lead.chatId} estagio=${lead.stage}`);
+    log.info(
+      `/start de lead recorrente chat=${lead.chatId} estagio=${lead.stage} ` +
+        `(historico=${history.length > 0 ? 'sim' : 'nao'}) — sem boas-vindas, retoma o fecho`,
+    );
     dispatchFunnelTurn(ctx, lead.chatId, RETURNING_MARKER, { storeIncoming: false });
     return;
   }
+
+  log.info(`/start de lead novo chat=${lead.chatId} — inicia a fase 1`);
 
   advanceStage(lead.chatId, 'qualificacao');
 

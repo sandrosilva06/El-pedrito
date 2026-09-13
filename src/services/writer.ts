@@ -104,8 +104,18 @@ MARCADORES ENTRE PARENTESES RETOS:
   que ele escreveu. Nunca a cites, nunca lhe respondas como se fosse texto
   dele, nunca reveles que a viste.
 - Quando o lead volta sem escrever nada, reconhece-o a tua maneira ("outra vez
-  por aqui?", "ainda por ca? ficou alguma duvida?") e retoma onde ficaram.
-  Sem "ola, sou o El Pedrito" — ele ja te conhece.
+  por aqui, bro?", "ainda por ca?") e retoma onde ficaram. Sem "ola, sou o El
+  Pedrito" e sem repetir a apresentacao do grupo: ele ja te conhece.
+- Nessa mensagem de regresso fazes duas coisas. Perguntas-lhe a decisao sem
+  rodeios, se ja resolveu entrar no grupo ou se vai continuar a adiar. E
+  contas-lhe como o grupo tem andado, usando as palavras "green atras de
+  green", que e a forma como se descreve uma sequencia boa. Com jeito, como
+  quem conta a um amigo o que andou a acontecer, nunca como anuncio.
+- Exemplo do tom, para imitares sem copiar: "olha que a malta no VIP esta a
+  faturar forte, tem sido green atras de green estes dias. bora la tratar do
+  teu registo para nao ficares a ver os outros a lucrar?"
+- Isto nao te autoriza a inventar numeros. "Green atras de green" descreve a
+  sequencia; percentagens e valores so os que estiverem na diretriz.
 
 O QUE NUNCA FAZES:
 - Nunca divulgas o casino como se fosse o produto. O produto e o grupo; o
@@ -408,9 +418,31 @@ export function splitIntoBubbles(text: string, maxBubbles: number): string[] {
   return kept;
 }
 
-/** Resposta usada quando o redator falha, para o lead nunca ficar no vacuo. */
-function fallbackReply(lead: Lead): string {
+/** Reconhece o marcador de regresso sem depender do texto exacto do bot.ts. */
+export function isReturningMarker(incoming: string): boolean {
+  return incoming.startsWith('[o lead voltou e carregou em /start');
+}
+
+/**
+ * Resposta usada quando o redator falha, para o lead nunca ficar no vacuo.
+ *
+ * O regresso tem texto proprio. Um lead que carrega em /start esta a dar um
+ * sinal de interesse, e responder-lhe "deu-me um problema no sistema" desperdica
+ * o unico momento em que ele veio ter connosco. Alem disso e a unica forma de
+ * garantir o "green atras de green" mesmo quando o Gemini esta em baixo.
+ */
+function fallbackReply(lead: Lead, incoming: string): string {
   const name = lead.firstName ? `${lead.firstName}, ` : '';
+
+  if (isReturningMarker(incoming)) {
+    const greeting = lead.firstName ? `Outra vez por aqui, ${lead.firstName}?` : 'Outra vez por aqui, bro?';
+    return (
+      `${greeting} Já decidiste se vais entrar no grupo VIP ou vais continuar a adiar?\n\n` +
+      'A malta lá dentro está a faturar forte, tem sido green atrás de green estes dias. ' +
+      'Bora lá tratar do teu registo para não ficares a ver os outros a lucrar?'
+    );
+  }
+
   return `${name}deu-me aqui um problema no sistema. Manda outra vez daqui a um bocadinho que eu respondo.`;
 }
 
@@ -485,5 +517,5 @@ export async function writeReply(params: {
     },
   });
 
-  return reply && reply.length > 0 ? reply : fallbackReply(lead);
+  return reply && reply.length > 0 ? reply : fallbackReply(lead, incoming);
 }

@@ -20,6 +20,12 @@ app.disable('x-powered-by');
  * "o bot nao responde" quase sempre se resolve olhando o que o Telegram acha
  * do webhook — e sem isso a unica pista fica presa nos logs da plataforma.
  */
+const storage = {
+  databaseFile: env.databaseFile,
+  /** true = os dados nao sobrevivem ao proximo deploy. */
+  ephemeral: env.databaseIsEphemeral,
+};
+
 const telegram: {
   mode: string;
   modeSource: string;
@@ -49,6 +55,7 @@ app.get('/health', (_req, res) => {
   res.json({
     status: telegram.error ? 'degraded' : 'ok',
     telegram,
+    storage,
     uptimeSeconds: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
   });
@@ -124,6 +131,20 @@ async function start(): Promise<void> {
   pruneProcessedUpdates();
   const prune = setInterval(() => pruneProcessedUpdates(), 60 * 60 * 1000);
   prune.unref();
+
+  // Um disco efemero nao da erro nenhum: o bot funciona, atende, converte, e
+  // perde tudo no deploy seguinte. E o tipo de falha que so se descobre quando
+  // a base de leads ja desapareceu, por isso grita-se aqui.
+  if (env.databaseIsEphemeral) {
+    const aviso =
+      `a base de dados esta em ${env.databaseFile}, dentro da pasta da aplicacao. ` +
+      'Num deploy este ficheiro e descartado e perdem-se leads, historico e o ' +
+      'estado do remarketing. Monta um disco persistente e aponta o ' +
+      'DATABASE_PATH para o mount path (ex.: /var/data/funnel.sqlite).';
+
+    if (isProduction) log.error(aviso);
+    else log.info(`base de dados local em ${env.databaseFile} (efemera, normal em desenvolvimento)`);
+  }
 
   if (env.modeSource === 'forcado-em-producao') {
     log.warn(

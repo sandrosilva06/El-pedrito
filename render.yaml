@@ -1,0 +1,49 @@
+# Blueprint do Render.
+#
+# O que aqui importa e o bloco `disk`. Sem ele o sistema de ficheiros do
+# contentor e descartado a cada deploy, e com ele vao os leads, o historico das
+# conversas e o estado do remarketing — sem erro nenhum, o servico continua a
+# responder como se nada fosse.
+#
+# O DATABASE_PATH tem de apontar para DENTRO do mountPath. Um caminho relativo
+# (o ./data/funnel.sqlite por omissao) fica na pasta da aplicacao e volta a ser
+# efemero; o arranque avisa em voz alta quando isso acontece.
+#
+# ATENCAO, duas consequencias de ter disco:
+#   - exige um plano pago; o plano gratuito do Render nao suporta discos.
+#   - o servico deixa de fazer deploys sem interrupcao e nao passa de uma
+#     instancia, porque o disco so pode estar montado num sitio de cada vez.
+#     Para este bot nao e problema: o SQLite tambem so aguenta um escritor.
+
+services:
+  - type: web
+    name: el-pedrito
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+
+    disk:
+      name: el-pedrito-dados
+      mountPath: /var/data
+      sizeGB: 1
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Dentro do mountPath acima. E esta linha que salva os leads.
+      - key: DATABASE_PATH
+        value: /var/data/funnel.sqlite
+
+      # Segredos: ficam por preencher no painel, nunca no repositorio.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: AFFILIATE_LINK
+        sync: false
+      # Se definido a mao, tambem serve de senha do GET /stats.
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false

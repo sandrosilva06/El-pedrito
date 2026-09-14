@@ -209,6 +209,16 @@ export type Env = Omit<
   modeSource: 'explicito' | 'automatico' | 'forcado-em-producao';
   /** Producao sem URL publica: nao da para registrar webhook e o bot fica mudo. */
   missingPublicUrlInProduction: boolean;
+  /**
+   * A base de dados esta num caminho que nao sobrevive a um deploy.
+   *
+   * No Render o sistema de ficheiros do contentor e descartado a cada deploy:
+   * sem um disco persistente montado, os leads, o historico e o estado do
+   * remarketing desaparecem sem erro nenhum, e o funil recomeca do zero sem
+   * ninguem dar por isso. Um erro silencioso destes custa a base de leads
+   * inteira, por isso e dito em voz alta no arranque e no /health.
+   */
+  databaseIsEphemeral: boolean;
 };
 
 /**
@@ -336,6 +346,12 @@ function load(): Env {
         ? 'explicito'
         : 'automatico',
     missingPublicUrlInProduction,
+    // Um disco persistente do Render monta FORA da pasta da aplicacao
+    // (/var/data, por exemplo). Um ficheiro dentro do cwd veio com o codigo e
+    // vai-se embora com ele no deploy seguinte.
+    databaseIsEphemeral:
+      databaseFile !== ':memory:' &&
+      !path.relative(process.cwd(), databaseFile).startsWith('..'),
   };
 }
 

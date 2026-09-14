@@ -353,11 +353,42 @@ servidor não entrega updates.
 Telegram falhou no boot — o servidor sobe mesmo assim, para o `/health` poder
 contar o motivo.
 
+### Persistência: o disco tem de ser seu
+
+O SQLite vive em `DATABASE_PATH`. Em produção **isso tem de apontar para um
+disco persistente**: o sistema de ficheiros do contentor é descartado a cada
+deploy, e com o valor por omissão (`./data/funnel.sqlite`, dentro da pasta da
+aplicação) cada deploy leva consigo os leads, o histórico das conversas, os
+comprovativos e o estado do remarketing. Sem erro nenhum: o serviço continua a
+responder, e o funil recomeça do zero.
+
+No Render, uma vez só:
+
+1. **Settings → Disks → Add Disk.** Mount path `/var/data`, 1 GB chega.
+   Repare que discos exigem um plano pago e desactivam deploys sem
+   interrupção — o disco só pode estar montado numa instância de cada vez, o
+   que para SQLite é o que se quer de qualquer maneira.
+2. **Environment → `DATABASE_PATH` = `/var/data/funnel.sqlite`.**
+3. Deploy.
+
+O `render.yaml` na raiz já declara as duas coisas, para quem criar o serviço a
+partir do blueprint.
+
+Para confirmar que ficou bem, o arranque escreve um `ERROR` em produção quando
+a base fica num caminho efémero, e o `GET /health` mostra:
+
+```json
+"storage": { "databaseFile": "/var/data/funnel.sqlite", "ephemeral": false }
+```
+
+`"ephemeral": true` em produção significa que vai perder tudo no próximo
+deploy.
+
 ### Rotas HTTP
 
 | Rota | Descrição |
 | --- | --- |
-| `GET /health` | Estado do registro no Telegram, uptime e o último erro de entrega. |
+| `GET /health` | Estado do registro no Telegram, uptime, o último erro de entrega e onde vive a base de dados (`storage`). |
 | `GET /stats` | Métricas do funil. Exige `x-admin-token` com o `TELEGRAM_WEBHOOK_SECRET` **configurado à mão**; com segredo derivado o endpoint fica desligado (`404`). |
 | `POST /webhook` | Webhook do Telegram (a rota registrada no arranque). |
 | `POST /telegram/<cauda-do-token>` | Mesmo handler; caminho legado, ainda aceito. |

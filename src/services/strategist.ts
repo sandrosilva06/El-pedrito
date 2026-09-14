@@ -241,40 +241,6 @@ REGRA DE OURO DESTA FASE:
   (turno 3) e o lead ter mostrado interesse. Mandar o link antes disso
   transforma a conversa em spam de casino.
 
-LEAD QUE VOLTA — quem carrega outra vez em /start ja te conhece:
-- Se a nova mensagem for o marcador "[o lead voltou e carregou em /start...]",
-  ele nao disse nada de novo: so reapareceu. NAO recomeces o funil, NAO repitas
-  a apresentacao, NAO te voltes a apresentar e NAO faças perguntas ja
-  respondidas. Ele nao e um desconhecido.
-- Reconhece o regresso de forma descontraida, como quem ve entrar um conhecido
-  ("outra vez por aqui?"), e passa logo ao assunto que ficou em aberto.
-- ANTES DE MAIS, olha para o estagio. Ha dois tipos de regresso:
-
-  (a) O lead JA PASSOU DA QUALIFICACAO (ja lhe falaste do grupo, da condicao
-      de entrada ou do link). Entao a diretriz faz duas coisas, nesta ordem:
-      1. PERGUNTAR A DECISAO, sem rodeios e sem ser antipatico: se ele ja
-         decidiu entrar no grupo ou se vai continuar a adiar.
-      2. PUXAR A PROVA SOCIAL DOS RESULTADOS RECENTES, e aqui a expressao
-         "green atras de green" e OBRIGATORIA. E a forma como se descreve o
-         que o grupo tem andado a fazer, e e o que faz o lead sentir que esta
-         a ficar de fora enquanto os outros faturam.
-
-  (b) O lead ainda esta na QUALIFICACAO e nunca chegou a ouvir a proposta.
-      Entao PROIBIDO perguntar-lhe se ja decidiu entrar: nao se pergunta a
-      decisao a quem nao recebeu proposta nenhuma, e isso denuncia o guiao.
-      Aqui o que se faz e retomar a conversa onde ficou, com a pergunta da
-      fase 1 que ficou por responder, de forma leve. Os resultados do grupo
-      podem entrar de passagem, mas sem cobranca de decisao.
-- Poe a expressao no campo "directive", com as palavras exactas, para o redator
-  a usar.
-- Retoma o passo onde a conversa ficou: a pergunta sem resposta, a duvida por
-  esclarecer, ou o passo seguinte do estagio. Se ele ja estava para receber o
-  link, volta a perguntar se esta pronto.
-- Nada disto autoriza inventar numeros. "Green atras de green" descreve a
-  sequencia, nao promete resultado nenhum, e nao se acrescentam percentagens
-  nem valores que nao estejam no teu contexto.
-- O estagio nao regride por causa disto. Mantem o que ja estava.
-
 OBJECOES COM RESPOSTA FIXA — usa estes angulos, nao improvises outros:
 
 "Vou pensar" / "faco mais logo" / "depois do trabalho" / "ao fim de semana"
@@ -428,6 +394,62 @@ function fallbackDirective(lead: Lead): SalesDirective {
   };
 }
 
+/** Marcador que o /start de um lead recorrente injecta como mensagem. */
+export function isReturningTurn(incoming: string): boolean {
+  return incoming.startsWith('[o lead voltou e carregou em /start');
+}
+
+/**
+ * Instrucoes de regresso, so no turno em que ha mesmo um regresso.
+ *
+ * Isto vivia no system instruction, que vai em todos os turnos, e vazava: o
+ * modelo dizia "vi que voltaste" a quem estava a meio da primeira conversa e
+ * nunca tinha saido. Um bloco insistente que nao se aplica ao turno e pior do
+ * que nao existir, porque tinge tudo o resto.
+ */
+function returningBlock(incoming: string): string {
+  if (!isReturningTurn(incoming)) {
+    return `ESTE TURNO NAO E UM REGRESSO. O lead esta a conversar contigo agora.
+E PROIBIDO dizer ou dar a entender que ele voltou, que reapareceu, que tinha
+desaparecido ou que ficou sem responder a alguma coisa. Trata isto como a
+conversa que e.`;
+  }
+
+  return `LEAD QUE VOLTA — quem carrega outra vez em /start ja te conhece:
+- Se a nova mensagem for o marcador "[o lead voltou e carregou em /start...]",
+  ele nao disse nada de novo: so reapareceu. NAO recomeces o funil, NAO repitas
+  a apresentacao, NAO te voltes a apresentar e NAO faças perguntas ja
+  respondidas. Ele nao e um desconhecido.
+- Reconhece o regresso de forma descontraida, como quem ve entrar um conhecido
+  ("outra vez por aqui?"), e passa logo ao assunto que ficou em aberto.
+- ANTES DE MAIS, olha para o estagio. Ha dois tipos de regresso:
+
+  (a) O lead JA PASSOU DA QUALIFICACAO (ja lhe falaste do grupo, da condicao
+      de entrada ou do link). Entao a diretriz faz duas coisas, nesta ordem:
+      1. PERGUNTAR A DECISAO, sem rodeios e sem ser antipatico: se ele ja
+         decidiu entrar no grupo ou se vai continuar a adiar.
+      2. PUXAR A PROVA SOCIAL DOS RESULTADOS RECENTES, e aqui a expressao
+         "green atras de green" e OBRIGATORIA. E a forma como se descreve o
+         que o grupo tem andado a fazer, e e o que faz o lead sentir que esta
+         a ficar de fora enquanto os outros faturam.
+
+  (b) O lead ainda esta na QUALIFICACAO e nunca chegou a ouvir a proposta.
+      Entao PROIBIDO perguntar-lhe se ja decidiu entrar: nao se pergunta a
+      decisao a quem nao recebeu proposta nenhuma, e isso denuncia o guiao.
+      Aqui o que se faz e retomar a conversa onde ficou, com a pergunta da
+      fase 1 que ficou por responder, de forma leve. Os resultados do grupo
+      podem entrar de passagem, mas sem cobranca de decisao.
+- Poe a expressao no campo "directive", com as palavras exactas, para o redator
+  a usar.
+- Retoma o passo onde a conversa ficou: a pergunta sem resposta, a duvida por
+  esclarecer, ou o passo seguinte do estagio. Se ele ja estava para receber o
+  link, volta a perguntar se esta pronto.
+- Nada disto autoriza inventar numeros. "Green atras de green" descreve a
+  sequencia, nao promete resultado nenhum, e nao se acrescentam percentagens
+  nem valores que nao estejam no teu contexto.
+- O estagio nao regride por causa disto. Mantem o que ja estava.`;
+}
+
 /**
  * Em que fase do funil esta a conversa, decidido em codigo e nao pelo modelo.
  *
@@ -518,6 +540,8 @@ export function buildPrompt(params: {
 - anotacoes anteriores: ${lead.notes ?? '(nenhuma)'}
 
 ${phaseBlock(lead, history)}
+
+${returningBlock(incoming)}
 
 HISTORICO RECENTE
 ${renderHistory(history)}

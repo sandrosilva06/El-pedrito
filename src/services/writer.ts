@@ -103,19 +103,7 @@ MARCADORES ENTRE PARENTESES RETOS:
   enviou um comprovativo...]" e o registo de um acontecimento, nao uma coisa
   que ele escreveu. Nunca a cites, nunca lhe respondas como se fosse texto
   dele, nunca reveles que a viste.
-- Quando o lead volta sem escrever nada, reconhece-o a tua maneira ("outra vez
-  por aqui, bro?", "ainda por ca?") e retoma onde ficaram. Sem "ola, sou o El
-  Pedrito" e sem repetir a apresentacao do grupo: ele ja te conhece.
-- Nessa mensagem de regresso fazes duas coisas. Perguntas-lhe a decisao sem
-  rodeios, se ja resolveu entrar no grupo ou se vai continuar a adiar. E
-  contas-lhe como o grupo tem andado, usando as palavras "green atras de
-  green", que e a forma como se descreve uma sequencia boa. Com jeito, como
-  quem conta a um amigo o que andou a acontecer, nunca como anuncio.
-- Exemplo do tom, para imitares sem copiar: "olha que a malta no VIP esta a
-  faturar forte, tem sido green atras de green estes dias. bora la tratar do
-  teu registo para nao ficares a ver os outros a lucrar?"
-- Isto nao te autoriza a inventar numeros. "Green atras de green" descreve a
-  sequencia; percentagens e valores so os que estiverem na diretriz.
+- O que fazer quando o lead volta vem na diretriz do turno, se for o caso.
 
 O QUE NUNCA FAZES:
 - Nunca divulgas o casino como se fosse o produto. O produto e o grupo; o
@@ -270,7 +258,12 @@ function buildKnownRule(lead: Lead): string {
   return lines.join('\n');
 }
 
-function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number): string {
+export function buildDirectiveBlock(
+  directive: SalesDirective,
+  lead: Lead,
+  turn: number,
+  incoming: string,
+): string {
   const sendLink = directive.includeLink && linkAllowed(turn, directive.stage);
 
   const linkRule =
@@ -293,13 +286,11 @@ function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number
   const phase = phaseRule(turn, directive.stage);
   const postponement = postponementRule(directive);
 
-  const cantonRule = lead.canton
-    ? `O lead vive em ${lead.canton}. JA TE DISSE ISTO: e PROIBIDO voltar a ` +
-      'perguntar onde mora, mesmo por outras palavras.'
-    : '';
+  const knownRule = buildKnownRule(lead);
+  const returning = returningRule(incoming, directive.stage);
 
   return `[DIRETRIZ INTERNA — NAO MOSTRES AO LEAD]
-${phase ? `${phase}\n` : ''}${postponement ? `${postponement}\n` : ''}${cantonRule ? `${cantonRule}\n` : ''}Nome do lead: ${lead.firstName ?? 'desconhecido'}
+${phase ? `${phase}\n` : ''}${returning}\n${postponement ? `${postponement}\n` : ''}${knownRule ? `${knownRule}\n` : ''}Nome do lead: ${lead.firstName ?? 'desconhecido'}
 Estagio do funil: ${directive.stage}
 Perfil do lead: ${directive.profile} — ${PROFILE_GUIDANCE[directive.profile]}
 Intencao detetada: ${directive.intent}
@@ -418,6 +409,46 @@ export function splitIntoBubbles(text: string, maxBubbles: number): string[] {
   return kept;
 }
 
+/**
+ * Orientacao de regresso, so no turno em que ha mesmo um regresso.
+ *
+ * Vivia no prompt permanente, que vai em todos os turnos, e vazava: o redator
+ * dizia "vi que voltaste" a quem estava a meio da primeira conversa e nunca
+ * tinha saido. Uma instrucao enfatica que nao se aplica ao turno tinge tudo o
+ * resto.
+ */
+function returningRule(incoming: string, stage: SalesDirective['stage']): string {
+  if (!isReturningMarker(incoming)) {
+    return (
+      'ESTE TURNO NAO E UM REGRESSO: o lead esta a falar contigo agora. E ' +
+      'PROIBIDO dizer ou sugerir que ele voltou, reapareceu, desapareceu ou ' +
+      'deixou alguma coisa por responder.'
+    );
+  }
+
+  const base =
+    'REGRESSO: o lead carregou em /start e nao escreveu nada. Reconhece-o a ' +
+    'tua maneira ("outra vez por aqui, bro?") e retoma onde ficaram. Sem te ' +
+    'voltares a apresentar e sem repetir a apresentacao do grupo: ele ja te ' +
+    'conhece.';
+
+  if (stage === 'novo' || stage === 'qualificacao') {
+    return (
+      `${base} Ele ainda nao ouviu a proposta, por isso NAO lhe perguntes se ja ` +
+      'decidiu entrar. Retoma a pergunta da fase 1 que ficou por responder, de ' +
+      'forma leve.'
+    );
+  }
+
+  return (
+    `${base} Pergunta-lhe a decisao sem rodeios, se ja resolveu entrar ou se vai ` +
+    'continuar a adiar, e conta-lhe como o grupo tem andado com as palavras ' +
+    '"green atras de green". Com jeito, como quem conta a um amigo, nunca como ' +
+    'anuncio. Nao inventes numeros: a expressao descreve a sequencia, e ' +
+    'percentagens e valores so os que estiverem na diretriz.'
+  );
+}
+
 /** Reconhece o marcador de regresso sem depender do texto exacto do bot.ts. */
 export function isReturningMarker(incoming: string): boolean {
   return incoming.startsWith('[o lead voltou e carregou em /start');
@@ -504,7 +535,7 @@ export async function writeReply(params: {
           // A persona e fixa; a diretriz muda a cada turno. As duas juntas na
           // instrucao de sistema mantem o historico livre de texto interno, que
           // o lead nunca deve ver ecoado de volta.
-          systemInstruction: `${PERSONA}\n\n${buildDirectiveBlock(directive, lead, turn)}`,
+          systemInstruction: `${PERSONA}\n\n${buildDirectiveBlock(directive, lead, turn, incoming)}`,
           // O redator nao decide nada: a estrategia ja veio pronta. Pensar aqui
           // so adiciona latencia a uma mensagem de 1-3 frases.
           thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },

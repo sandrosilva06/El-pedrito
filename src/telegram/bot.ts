@@ -616,9 +616,20 @@ bot.on('message:text', async (ctx) => {
 });
 
 /**
- * Comprovativo de deposito. O bot NUNCA aprova sozinho: guarda o ficheiro,
- * avisa quem valida e responde ao lead que a validacao esta em curso. Libertar
- * o acesso automaticamente daria grupo a quem mandasse qualquer imagem.
+ * Imagem recebida do lead. Guarda, reencaminha a quem valida, E NAO RESPONDE.
+ *
+ * O bot nao sabe o que esta na imagem. Ja aconteceu um lead mandar o print de
+ * um erro do link, a pedir ajuda, e receber de volta "recebi o teu deposito,
+ * vou validar": do lado dele, ou o bot nao percebeu nada ou aquilo e burla. Ele
+ * bloqueou, e tinha razao.
+ *
+ * Por isso a imagem so faz duas coisas: fica registada e vai para o canal de
+ * validacao, onde uma pessoa olha. A conversa segue quando o lead ESCREVER —
+ * e se ele disser que esta feito, ai sim o funil confirma que vai validar.
+ *
+ * Pela mesma razao o estagio nao avanca: uma imagem sozinha nao prova deposito
+ * nenhum, e marca-lo como comprovativo_recebido dava-o por convertido e
+ * tirava-o do remarketing.
  */
 bot.on([':photo', ':document'], async (ctx) => {
   const lead = leadFromContext(ctx);
@@ -653,28 +664,22 @@ bot.on([':photo', ':document'], async (ctx) => {
     messageId: message.message_id,
   });
 
-  advanceStage(lead.chatId, 'comprovativo_recebido');
-  // Cumpriu: nao faz sentido continuar a lembra-lo de depositar.
+  // Ele mexeu-se: nao faz sentido apitar-lhe o lembrete de deposito a seguir.
   clearDepositPromise(lead.chatId);
 
-  // Fica no historico para o estrategista nao voltar a pedir o comprovativo.
+  // Fica no historico para o estrategista saber que a imagem chegou e que
+  // ficou sem resposta. E ele que decide o que fazer quando o lead escrever.
   addMessage({
     chatId: lead.chatId,
     role: 'user',
-    content: '[o lead enviou um comprovativo de deposito]',
+    content: '[o lead enviou uma imagem; ninguem lhe respondeu e ainda nao se sabe o que ela mostra]',
   });
 
-  const name = lead.firstName ? `, ${lead.firstName}` : '';
-  const answer =
-    `Obrigado pelo print${name}! Vou validar a tua conta e o teu depósito ` +
-    'e já te liberto o acesso ao grupo VIP.';
-
-  addMessage({ chatId: lead.chatId, role: 'assistant', content: answer });
-  dispatchMessage(ctx, lead.chatId, answer);
-
+  // Nenhuma resposta ao lead, de proposito. Ver o comentario no topo.
   log.info(
-    `comprovativo #${proof.id} recebido — chat=${lead.chatId} nome=${lead.firstName ?? '?'} ` +
-      `username=${lead.username ? '@' + lead.username : '?'} aguarda validacao manual`,
+    `imagem #${proof.id} recebida — chat=${lead.chatId} nome=${lead.firstName ?? '?'} ` +
+      `username=${lead.username ? '@' + lead.username : '?'} ` +
+      'reencaminhada para validacao, sem resposta ao lead',
   );
 
   await notifyAdmins(proof.id, lead, fileId, fileKind);
@@ -696,7 +701,7 @@ async function notifyAdmins(
   }
 
   const caption =
-    `Comprovativo #${proofId} — validacao manual\n\n` +
+    `Imagem #${proofId} — por validar\n\n` +
     `Nome: ${lead.firstName ?? '(sem nome)'}\n` +
     `Username: ${lead.username ? `@${lead.username}` : '(sem username)'}\n` +
     `ID: ${lead.chatId}`;

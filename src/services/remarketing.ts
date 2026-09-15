@@ -58,6 +58,11 @@ const FALLBACK_SCRIPTS: Record<RemarketingAudience, string[]> = {
   // Usado so se alguem pedir "nao_convertido" sem dizer o toque; o caminho
   // normal passa pelo NAO_CONVERTIDO_TOUCHES acima.
   nao_convertido: NAO_CONVERTIDO_TOUCHES[0]?.fallbacks ?? [],
+  link_parado: [
+    '{nome}, conseguiste abrir o link? Se deu erro copia e cola noutro navegador, que às vezes o do Telegram baralha-se.',
+    'Boas {nome}! Ficaste com a conta feita ou travaste nalguma parte? Diz-me onde é que ficaste que eu ajudo-te a passar daí.',
+    '{nome}, tudo bem? Só para saber se a página abriu. Se precisares, faço o registo contigo passo a passo.',
+  ],
   vip: [
     'Boas companheiro! Ja foste dar uma olhadela as entradas que mandei hoje no VIP? Nao deixes passar os greens!',
     '{nome}, mandei as entradas do dia no grupo. Da la um salto antes que os jogos comecem.',
@@ -72,6 +77,11 @@ const FALLBACK_SCRIPTS: Record<RemarketingAudience, string[]> = {
 
 const BRIEFS: Record<RemarketingAudience, string> = {
   nao_convertido: NAO_CONVERTIDO_TOUCHES[0]?.brief ?? '',
+  link_parado: `Este lead recebeu o link ha pouco e ficou calado. Nao esta a
+recusar, travou em alguma coisa: ou a pagina nao abriu, ou perdeu-se no
+registo. A mensagem pergunta o que aconteceu e oferece ajuda concreta, passo a
+passo. PROIBIDO falar de deposito, de valores ou de urgencia: o que falta saber
+e onde ele parou. Uma pergunta so, facil de responder.`,
   vip: `Estes leads ja estao no grupo VIP. A mensagem deve puxa-los de volta ao
 grupo para verem as entradas do dia. Tom de companheirismo, nada de vendas —
 estas pessoas ja compraram.`,

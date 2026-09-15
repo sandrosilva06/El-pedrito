@@ -186,7 +186,8 @@ export function phaseRule(turn: number, stage: SalesDirective['stage']): string 
       'FASE — RAPPORT: esta mensagem e so conversa. PROIBIDO mencionar registo, ' +
       `deposito, link, valores, bonus ou ${env.PLATFORM_NAME}. Se o lead perguntar ` +
       'quanto custa, diz que ja la vais e faz-lhe uma pergunta sobre ele. ' +
-      'Descobre o nome, o cantao onde vive ou ha quanto tempo esta na Suica.'
+      'Descobre em que e que ele trabalha, que e o que te deixa falar a serio ' +
+      'com ele a seguir.'
     );
   }
 
@@ -202,6 +203,35 @@ export function phaseRule(turn: number, stage: SalesDirective['stage']): string 
       'FASE — CONDICAO E PRONTIDAO: explica que entrar e gratuito e o que e ' +
       'preciso, e TERMINA a perguntar se ele esta pronto para abrir a conta e ' +
       'garantir a vaga no VIP. NAO mandes o link nesta mensagem.'
+    );
+  }
+
+  // A partir daqui o lead ja tem o link. Era o unico momento do funil sem
+  // regra de fase nenhuma, e e o momento que decide a venda: metade dos leads
+  // chegava a receber o link e nenhum passava dai.
+  if (stage === 'registo_enviado') {
+    return (
+      'FASE — ACOMPANHAR O REGISTO: ele ja tem o link. Pergunta se a pagina ' +
+      'ABRIU, nao se ja depositou. Se deu erro, diz-lhe para copiar o link e ' +
+      'colar noutro navegador, e nao fales de deposito enquanto isso nao ' +
+      'estiver resolvido. Oferece levar o registo com ele, passo a passo, e se ' +
+      'ele disser que travou pergunta EM QUE PARTE travou.'
+    );
+  }
+
+  if (stage === 'registado') {
+    return (
+      'FASE — DEPOSITO: ele ja tem conta. Agora sim, o deposito, lembrando que ' +
+      'o dinheiro fica na conta dele e sai de la quando quiser. Termina a ' +
+      'perguntar se ele quer tratar disso agora.'
+    );
+  }
+
+  if (stage === 'deposito_enviado') {
+    return (
+      'FASE — PRINT: ele diz que depositou. Pede-lhe o print, com naturalidade, ' +
+      'e diz que o acesso sai assim que for validado. NAO confirmes que o ' +
+      'acesso ja foi dado.'
     );
   }
 
@@ -232,6 +262,15 @@ export function linkAllowed(turn: number, stage: SalesDirective['stage']): boole
 function buildKnownRule(lead: Lead): string {
   const lines: string[] = [];
 
+  if (lead.job) {
+    lines.push(
+      `O lead trabalha em ${lead.job}. JA TE DISSE ISTO: e PROIBIDO voltar a ` +
+        'perguntar em que trabalha, onde trabalha ou que horario faz. Usa-o ' +
+        'para falar a serio com ele: os turnos que faz, as horas que lhe ' +
+        'sobram, o que lhe rende o dia.',
+    );
+  }
+
   if (lead.canton) {
     lines.push(
       `O lead vive em ${lead.canton}. JA TE DISSE ISTO: e PROIBIDO voltar a ` +
@@ -252,7 +291,7 @@ function buildKnownRule(lead: Lead): string {
     );
   }
 
-  if (lead.canton && lead.bettingExperience) {
+  if (lead.job && lead.bettingExperience) {
     lines.push(
       'A QUALIFICACAO ACABOU. Nada de perguntas sobre ele: a conversa agora e ' +
         'de parceiro, e o que procuras e a decisao dele sobre entrar no grupo.',

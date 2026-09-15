@@ -22,7 +22,8 @@ import { bot } from '../telegram/bot';
 
 const log = createLogger('agendador');
 
-const AUDIENCES: RemarketingAudience[] = ['nao_convertido', 'vip'];
+// O link_parado vem primeiro: e o balde mais quente e o que mais se perde.
+const AUDIENCES: RemarketingAudience[] = ['link_parado', 'nao_convertido', 'vip'];
 
 /** Tecto por slot: uma campanha nao deve inundar a API do Telegram de uma vez. */
 const BATCH_LIMIT = 200;
@@ -66,9 +67,13 @@ async function sendToAudience(
   // janela reenviaria a campanha inteira.
   if (!claimRemarketingSlot(slot, date, audience)) return;
 
-  // O VIP e uma lista so; quem nao converteu corre toque a toque, porque cada
-  // toque tem o seu texto e a sua janela de tempo.
-  const touches = audience === 'vip' ? [0] : [...Array(MAX_TOUCHES).keys()];
+  // O VIP e o link_parado sao listas so; quem nao converteu corre toque a
+  // toque, porque cada toque tem o seu texto e a sua janela de tempo.
+  //
+  // O toque do link_parado conta no mesmo contador, de proposito: assim um lead
+  // que o receba fica com um dos dois toques gastos e nunca leva mais do que as
+  // duas mensagens automaticas combinadas.
+  const touches = audience === 'nao_convertido' ? [...Array(MAX_TOUCHES).keys()] : [0];
 
   let sent = 0;
   let considered = 0;
@@ -79,13 +84,18 @@ async function sendToAudience(
       touch,
       // Primeiro toque: conta desde a ultima coisa que o lead disse. Segundo:
       // continua a exigir o mesmo silencio, mais o intervalo desde o toque 1.
-      coldHours: env.REMARKETING_FIRST_TOUCH_HOURS,
+      coldHours:
+        audience === 'link_parado'
+          ? env.REMARKETING_LINK_STALLED_HOURS
+          : env.REMARKETING_FIRST_TOUCH_HOURS,
       sinceLastTouchHours:
-        audience === 'vip'
-          ? env.REMARKETING_QUIET_HOURS
-          : touch === 0
-            ? env.REMARKETING_FIRST_TOUCH_HOURS
-            : env.REMARKETING_SECOND_TOUCH_HOURS,
+        audience === 'link_parado'
+          ? env.REMARKETING_LINK_STALLED_HOURS
+          : audience === 'vip'
+            ? env.REMARKETING_QUIET_HOURS
+            : touch === 0
+              ? env.REMARKETING_FIRST_TOUCH_HOURS
+              : env.REMARKETING_SECOND_TOUCH_HOURS,
       limit: BATCH_LIMIT,
     });
 

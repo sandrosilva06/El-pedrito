@@ -14,6 +14,7 @@ import {
   recordDepositProof,
   setBettingExperience,
   setCanton,
+  setJob,
   setDepositPromise,
   setNotes,
   upsertLead,
@@ -428,6 +429,27 @@ function recordCanton(
 }
 
 /**
+ * Guarda em que o lead trabalha.
+ *
+ * Ao contrario do cantao e da experiencia, aqui nao ha detector em codigo: uma
+ * profissao e texto aberto ("ando nas obras", "sou enfermeira", "trabalho na
+ * restauracao") e nenhuma lista fechada a apanharia. Quem garante que a
+ * pergunta nao se repete e a coluna preenchida, lida pelo phaseBlock, e nao a
+ * deteccao.
+ *
+ * A escrita e ignorada se ja houver resposta: a primeira e a boa.
+ */
+function recordJob(chatId: number, known: string | null, directive: SalesDirective): void {
+  if (known) return;
+
+  const job = directive.job.trim();
+  if (job.length === 0) return;
+
+  setJob(chatId, job);
+  log.info(`trabalho registado chat=${chatId} -> ${job}`);
+}
+
+/**
  * Guarda se o lead ja aposta ou esta a comecar, pelas mesmas razoes do cantao:
  * e o campo guardado, e nao a memoria do modelo, que trava a repeticao da
  * pergunta na fase 2.
@@ -592,6 +614,7 @@ async function runFunnelTurn(
       advanceStage(chatId, directive.shouldStop ? 'perdido' : directive.stage);
       recordPromise(chatId, directive);
       recordCanton(chatId, current.canton, incoming, directive);
+      recordJob(chatId, current.job, directive);
       recordExperience(chatId, current.bettingExperience, incoming, directive);
 
       if (directive.notes.trim().length > 0) {

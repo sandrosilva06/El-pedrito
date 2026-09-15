@@ -173,6 +173,14 @@ const schema = z
      */
     REMARKETING_SECOND_TOUCH_HOURS: intFromString(48, 1, 720),
     /**
+     * Silencio necessario para tocar em quem ja recebeu o link.
+     *
+     * Muito mais curto do que o toque normal de proposito: um lead que recebeu
+     * o link ha duas horas e ficou calado nao mudou de ideias, travou em
+     * alguma coisa. Esperar 24h e chegar tarde.
+     */
+    REMARKETING_LINK_STALLED_HOURS: intFromString(3, 1, 168),
+    /**
      * Pausa entre envios dentro da mesma campanha. O Telegram limita a ~30
      * mensagens por segundo e responde a rajadas com 429; 120ms deixa margem
      * e continua a despachar uma lista grande em pouco tempo.

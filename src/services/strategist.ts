@@ -56,6 +56,11 @@ export interface SalesDirective {
    */
   canton: string;
   /**
+   * Em que o lead trabalha, nas palavras dele, se o disser NESTA mensagem; ""
+   * caso contrario. Serve para gravar, nunca para justificar repetir a pergunta.
+   */
+  job: string;
+  /**
    * "experiente" ou "iniciante", se o lead o disser NESTA mensagem; "" caso
    * contrario. Serve para gravar, nunca para justificar repetir a pergunta.
    */
@@ -91,6 +96,13 @@ const responseSchema: Schema = {
       type: Type.STRING,
       description: 'Hora HH:MM que o lead deu para tratar do deposito, ou vazio',
     },
+    job: {
+      type: Type.STRING,
+      description:
+        'Em que o lead disse trabalhar NESTA mensagem, em poucas palavras ' +
+        '(ex.: "construcao civil", "enfermeira", "restauracao"). Vazio se nao ' +
+        'falou do trabalho dele.',
+    },
     bettingExperience: {
       type: Type.STRING,
       description:
@@ -116,6 +128,7 @@ const responseSchema: Schema = {
     'profile',
     'promisedTime',
     'canton',
+    'job',
     'bettingExperience',
     'includeLink',
     'notes',
@@ -142,8 +155,11 @@ SEQUENCIA DE ABORDAGEM — a ordem importa mais do que o argumento:
 
 TURNOS 1-2 — FASE 1, QUALIFICACAO (uma vez so, nunca mais)
 - A fase 1 serve para saber DUAS coisas, e mais nada:
-  · em que cantao da Suica esta a morar (VER A REGRA DO CANTAO ABAIXO)
+  · EM QUE E QUE ELE TRABALHA
   · se ja costuma apostar em futebol ou esta a comecar agora
+- O trabalho e a pergunta que abre a conversa a serio: diz-te o horario dele, o
+  que lhe rende o dia e o que ele quer mudar. Pergunta-a com interesse
+  genuino, como quem quer saber, nao como quem preenche uma ficha.
 - UMA de cada vez, no meio da conversa, nunca as duas na mesma mensagem e
   nunca em forma de formulario.
 - Assim que tiveres as duas respostas, a fase 1 ACABOU e nunca mais se repete.
@@ -184,24 +200,67 @@ TURNO SEGUINTE — LINK, SO APOS CONFIRMACAO EXPLICITA
 - A sugestao dos ${env.SUGGESTED_DEPOSIT} e um conselho, nao um requisito:
   ${env.MIN_DEPOSIT} continua a ser suficiente e isso tem de ficar claro.
 
-DEPOIS — VALIDACAO
+DEPOIS DO LINK — E AQUI QUE SE PERDEM OS LEADS. Le com atencao.
+
+Mandar o link nao e fechar. A maior parte dos leads que desaparecem desaparece
+exactamente aqui: receberam o link e ninguem lhes perguntou mais nada. Ficar a
+espera do print e a forma mais certa de os perder. A partir do momento em que o
+link sai, tu acompanhas.
+
+PASSO 1 — O LINK ABRIU?
+- No turno a seguir ao link, a diretriz pergunta se a pagina ABRIU. Nao
+  pergunta se ele ja depositou.
+- Quem nao conseguiu abrir a pagina nao responde a "ja esta feito?", responde
+  ao silencio. Ja aconteceu um lead apanhar um erro no link e ninguem dar por
+  isso.
+- Se ele disser que deu erro ou que nao abriu: trata disso e mais nada. Sugere
+  abrir o link noutro navegador, copiando e colando em vez de carregar. NAO
+  fales de deposito enquanto ele nao tiver a pagina a funcionar.
+
+PASSO 2 — ACOMPANHAR O REGISTO
+- Oferece levar o registo com ele, passo a passo. Nao e "avisa quando tiveres
+  feito", e "diz-me quando estiveres na pagina que eu digo-te o que preencher".
+- Se ele disser que travou, PERGUNTA EM QUE PARTE travou. Uma resposta vaga
+  ("nao consegui") sem essa pergunta perde o lead.
+- stage="registado" so quando ele disser que tem conta criada.
+
+PASSO 3 — SO ENTAO O DEPOSITO
+- O deposito so entra depois de haver conta. Falar do deposito a quem ainda nao
+  se registou e empilhar dois passos e perder os dois.
+- Lembra que o dinheiro fica na conta dele e que sai de la quando quiser.
+
+PASSO 4 — VALIDACAO
 - Pedir o print do deposito para libertar o acesso VIP.
+
+REGRA QUE VALE PARA OS QUATRO PASSOS:
+- A diretriz tem SEMPRE um passo concreto e uma pergunta. Nunca "aguardar",
+  nunca "esperar que ele responda". Se nao sabes onde ele esta, pergunta onde
+  ele esta.
+- Silencio nao e desistencia. Um lead calado depois do link e um lead que
+  travou em alguma coisa, e o teu trabalho e descobrir em qual.
 
 A sequencia pode andar mais devagar, nunca mais depressa: se ao turno 4 o lead
 ainda esta a duvidar, trata a duvida e adia a condicao de entrada. O que nao
 pode e saltar etapas — vender antes de haver conversa e o erro que mata o
 funil.
 
-REGRA DO CANTAO — le o campo "cantao" do CONTEXTO DO LEAD:
-- Se tiver um valor: o lead JA DISSE onde mora. E ESTRITAMENTE PROIBIDO voltar
-  a perguntar, de qualquer forma, incluindo "e em que zona?" ou "onde e que
-  disseste que estavas?". Usa o que ja sabes para criar proximidade.
-- Se estiver "desconhecido" e for turno 1 ou 2: podes perguntar UMA vez.
-- Se estiver "desconhecido" e for turno 3 ou mais: o lead nao quis dizer.
-  Deixa estar e segue para a fase seguinte. Insistir num dado que ele evitou
-  transforma a conversa num interrogatorio.
-- Preenche o campo "canton" da diretriz APENAS quando ele indicar a
-  localizacao nesta mensagem. Nos outros turnos deixa vazio.
+REGRA DO CANTAO — ja NAO se pergunta:
+- O cantao deixou de ser pergunta de qualificacao. NAO perguntes onde ele mora,
+  em que cantao vive nem em que zona esta. O lugar dessa pergunta foi dado ao
+  trabalho, que rende muito mais conversa.
+- Se ele disser onde vive por iniciativa dele, aproveita para criar
+  proximidade de emigrante, e preenche o campo "canton" da diretriz nesse
+  turno. Perguntar, nao.
+- Se o campo ja tiver valor, e ESTRITAMENTE PROIBIDO voltar a perguntar, de
+  qualquer forma, incluindo "e em que zona?" ou "onde e que disseste que
+  estavas?".
+
+REGRA DO TRABALHO — le o campo "trabalho" do CONTEXTO DO LEAD:
+- Se tiver um valor, o lead JA RESPONDEU. E ESTRITAMENTE PROIBIDO voltar a
+  perguntar em que trabalha, onde trabalha ou que horario faz. Usa o que ja
+  sabes.
+- Preenche o campo "job" da diretriz APENAS quando ele falar do trabalho NESTA
+  mensagem, em poucas palavras e nas palavras dele.
 
 REGRA DA EXPERIENCIA — le o campo "experiencia com apostas" do CONTEXTO:
 - Se tiver um valor, o lead JA RESPONDEU. E ESTRITAMENTE PROIBIDO voltar a
@@ -404,6 +463,7 @@ function fallbackDirective(lead: Lead): SalesDirective {
     profile: 'indefinido',
     promisedTime: '',
     canton: '',
+    job: '',
     bettingExperience: '',
     includeLink: false,
     notes: '',
@@ -470,9 +530,9 @@ conversa que e.`;
 /**
  * Em que fase do funil esta a conversa, decidido em codigo e nao pelo modelo.
  *
- * A fase 1 e so a qualificacao: cantao e experiencia com apostas. Assim que as
- * duas respostas estiverem guardadas, a conversa passa a fase 2 e essas
- * perguntas ficam proibidas.
+ * A fase 1 e so a qualificacao: o trabalho dele e a experiencia com apostas.
+ * Assim que as duas respostas estiverem guardadas, a conversa passa a fase 2 e
+ * essas perguntas ficam proibidas.
  *
  * Isto e calculado a partir do que esta na base de dados, e nao deixado ao
  * criterio do modelo a ler o historico, porque foi exactamente essa a falha
@@ -480,10 +540,10 @@ conversa que e.`;
  * esquece-se; uma coluna preenchida nao.
  */
 export function phaseBlock(
-  lead: Pick<Lead, 'canton' | 'bettingExperience'>,
+  lead: Pick<Lead, 'canton' | 'job' | 'bettingExperience'>,
   history: StoredMessage[],
 ): string {
-  const hasCanton = Boolean(lead.canton);
+  const hasJob = Boolean(lead.job);
   const hasExperience = Boolean(lead.bettingExperience);
 
   // Valvula de escape: o que o lead nao disse ao fim de alguns turnos e porque
@@ -492,14 +552,14 @@ export function phaseBlock(
   //
   // Sao cinco turnos e nao tres porque as perguntas da fase 1 sao duas e saem
   // uma de cada vez, intercaladas com conversa: com o corte mais cedo, quem
-  // respondesse ao cantao ao segundo turno passava a fase 2 sem a segunda
+  // respondesse ao trabalho ao segundo turno passava a fase 2 sem a segunda
   // pergunta ter chegado a ser feita.
   const turn = history.filter((message) => message.role === 'user').length + 1;
-  const qualificationOver = (hasCanton && hasExperience) || turn >= 5;
+  const qualificationOver = (hasJob && hasExperience) || turn >= 5;
 
   if (!qualificationOver) {
     const missing = [
-      hasCanton ? null : 'o cantao da Suica onde mora',
+      hasJob ? null : 'em que e que ele trabalha',
       hasExperience ? null : 'se ja costuma apostar ou se esta a comecar agora',
     ].filter((item): item is string => item !== null);
 
@@ -507,16 +567,26 @@ export function phaseBlock(
 Falta saber: ${missing.join(' e ')}.
 - Pergunta UMA de cada vez, no meio da conversa, nunca as duas na mesma
   mensagem e nunca como formulario.
-${hasCanton ? '- O cantao JA ESTA SABIDO. PROIBIDO voltar a perguntar onde mora, de qualquer forma.\n' : ''}${hasExperience ? '- A experiencia JA ESTA SABIDA. PROIBIDO voltar a perguntar se ja aposta.\n' : ''}- Assim que tiveres as duas respostas, a conversa passa a fase 2 sozinha.`;
+${hasJob ? `- O trabalho JA ESTA SABIDO (${lead.job}). PROIBIDO voltar a perguntar em que trabalha.\n` : ''}${hasExperience ? '- A experiencia JA ESTA SABIDA. PROIBIDO voltar a perguntar se ja aposta.\n' : ''}${lead.canton ? `- Ele ja disse que vive em ${lead.canton}. PROIBIDO perguntar onde mora.\n` : '- NAO perguntes o cantao nem onde ele mora. Se ele disser por iniciativa dele, aproveita; perguntar nao.\n'}- Assim que tiveres as duas respostas, a conversa passa a fase 2 sozinha.`;
   }
 
   return `FASE ACTUAL: 2 — CONEXAO E FECHO
 A qualificacao ACABOU. E ESTRITAMENTE PROIBIDO, em qualquer forma ou pretexto,
 voltar a perguntar:
+  · em que trabalha, onde trabalha, que horario faz
   · onde mora, em que cantao, em que zona, ha quanto tempo esta na Suica
   · se ja aposta, se percebe de apostas, se e a primeira vez
-Ja sabes: cantao ${lead.canton ?? '(nao quis dizer)'}, experiencia ${lead.bettingExperience ?? '(nao quis dizer)'}.
+Ja sabes: trabalho ${lead.job ?? '(nao quis dizer)'}, experiencia ${lead.bettingExperience ?? '(nao quis dizer)'}${lead.canton ? `, vive em ${lead.canton}` : ''}.
 Usa isso para criar proximidade, nao para reabrir o assunto.
+
+USA O TRABALHO DELE PARA FALAR A SERIO:
+- Ligar a proposta a vida de trabalho dele e o que faz a conversa deixar de ser
+  um guiao: os turnos que ele faz, as horas que lhe sobram, o que lhe rende o
+  dia. Quem trabalha por turnos entende logo o valor de ter as entradas
+  prontas, sem ter de estudar jogos.
+- Isto e criar ligacao, NAO e apertar. PROIBIDO usar as dificuldades dele como
+  alavanca: se ele falar em dividas, aperto a serio ou desespero, isso nao e um
+  sinal de compra, e shouldStop=true.
 
 O QUE FAZES AGORA:
 - Conversa de parceiro, nao de vendedor. Amigavel, natural, proxima. Es alguem
@@ -552,6 +622,7 @@ export function buildPrompt(params: {
 - nome: ${lead.firstName ?? 'desconhecido'}
 - estagio atual: ${lead.stage}
 - cantao: ${lead.canton ?? 'desconhecido'}
+- trabalho: ${lead.job ?? 'desconhecido'}
 - experiencia com apostas: ${lead.bettingExperience ?? 'desconhecida'}
 - TURNO NUMERO: ${history.filter((m) => m.role === 'user').length + 1} (usa a SEQUENCIA DE ABORDAGEM)
 - anotacoes anteriores: ${lead.notes ?? '(nenhuma)'}
@@ -650,6 +721,7 @@ async function requestDirective(params: {
         ? String(parsed.promisedTime)
         : '',
       canton: text(parsed.canton, ''),
+      job: text(parsed.job, '').slice(0, 60),
       bettingExperience: text(parsed.bettingExperience, ''),
       includeLink: parsed.includeLink === true,
       notes: text(parsed.notes, ''),

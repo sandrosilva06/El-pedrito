@@ -66,6 +66,14 @@ export interface Lead {
   /** Cantao onde vive, assim que o disser. Null enquanto nao se souber. */
   canton: string | null;
   /**
+   * Em que trabalha, nas palavras dele. Null enquanto nao se souber.
+   *
+   * Ao contrario do cantao e da experiencia, nao ha detector em codigo: uma
+   * profissao e texto aberto e uma lista fechada nunca a apanharia. Quem
+   * garante que a pergunta nao se repete e esta coluna, nao a deteccao.
+   */
+  job: string | null;
+  /**
    * Se ja aposta ou se esta a comecar. Null enquanto nao se souber.
    *
    * Guardado pela mesma razao do cantao: e este campo, e nao a memoria do
@@ -137,7 +145,7 @@ export interface DepositProof {
 }
 
 /** Publicos do remarketing: quem ainda nao depositou, e quem ja esta no VIP. */
-export type RemarketingAudience = 'nao_convertido' | 'vip' | 'promessa';
+export type RemarketingAudience = 'nao_convertido' | 'vip' | 'promessa' | 'link_parado';
 
 export interface FunnelStats {
   totalLeads: number;
@@ -154,6 +162,7 @@ interface LeadRow {
   promised_at: string | null;
   promise_note: string | null;
   canton: string | null;
+  job: string | null;
   betting_experience: string | null;
   first_name: string | null;
   username: string | null;
@@ -275,6 +284,9 @@ addColumnIfMissing('messages', 'author', "TEXT NOT NULL DEFAULT 'bot'");
 // a conversa poder mostrar o que foi trocado.
 addColumnIfMissing('messages', 'media_file_id', 'TEXT');
 addColumnIfMissing('messages', 'media_kind', 'TEXT');
+// Em que o lead trabalha. Substitui o cantao como pergunta de qualificacao: o
+// trabalho diz mais sobre o tempo e o dinheiro dele, e da muito mais que falar.
+addColumnIfMissing('leads', 'job', 'TEXT');
 
 /**
  * Updates do Telegram ja processados.
@@ -351,6 +363,7 @@ function mapLead(row: LeadRow): Lead {
     promisedAt: row.promised_at,
     promiseNote: row.promise_note,
     canton: row.canton,
+    job: row.job,
     bettingExperience: row.betting_experience,
     firstName: row.first_name,
     username: row.username,
@@ -509,6 +522,10 @@ const statements = {
     UPDATE leads SET canton = ?, updated_at = datetime('now')
      WHERE chat_id = ? AND (canton IS NULL OR canton = '')
   `),
+  setJob: db.prepare(`
+    UPDATE leads SET job = ?, updated_at = datetime('now')
+     WHERE chat_id = ? AND (job IS NULL OR job = '')
+  `),
   setBettingExperience: db.prepare(`
     UPDATE leads SET betting_experience = ?, updated_at = datetime('now')
      WHERE chat_id = ? AND (betting_experience IS NULL OR betting_experience = '')
@@ -532,6 +549,24 @@ const statements = {
   countPromises: db.prepare(
     'SELECT COUNT(*) AS total FROM leads WHERE promised_at IS NOT NULL',
   ),
+  /**
+   * Lead que recebeu o link e ficou calado.
+   *
+   * E o balde mais quente do funil e o que mais se perde: ele ja disse que sim,
+   * ja tem a pagina, e travou em alguma coisa. Esperar as 24h do toque normal e
+   * chegar tarde. Por isso tem lista propria, com janela propria.
+   */
+  targetsLinkParado: db.prepare(`
+    SELECT * FROM leads
+     WHERE blocked = 0
+       AND remarketing_cancelled = 0
+       AND stage IN ('registo_enviado', 'registado')
+       AND remarketing_touches = 0
+       AND promised_at IS NULL
+       AND updated_at <= datetime('now', ?)
+     ORDER BY updated_at ASC
+     LIMIT ?
+  `),
   targetsNotConverted: db.prepare(`
     SELECT * FROM leads
      WHERE blocked = 0
@@ -873,7 +908,9 @@ export function getRemarketingTargets(params: {
   const sinceLast = `-${params.sinceLastTouchHours} hours`;
 
   const rows =
-    params.audience === 'vip'
+    params.audience === 'link_parado'
+      ? asRows<LeadRow>(statements.targetsLinkParado.all(cold, params.limit))
+      : params.audience === 'vip'
       ? asRows<LeadRow>(statements.targetsVip.all(sinceLast, params.limit))
       : asRows<LeadRow>(
           statements.targetsNotConverted.all(params.touch ?? 0, cold, sinceLast, params.limit),
@@ -945,6 +982,11 @@ export function pruneProcessedUpdates(keep = 5000): void {
 
 export function setCanton(chatId: number, canton: string): void {
   statements.setCanton.run(canton, chatId);
+}
+
+/** A primeira resposta e a boa: escritas seguintes sao ignoradas no SQL. */
+export function setJob(chatId: number, job: string): void {
+  statements.setJob.run(job, chatId);
 }
 
 /** A primeira resposta e a boa: escritas seguintes sao ignoradas no SQL. */

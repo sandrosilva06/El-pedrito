@@ -183,6 +183,24 @@ const schema = z
     RATE_LIMIT_WINDOW_SECONDS: intFromString(60, 1, 3600),
 
     ADMIN_CHAT_IDS: csvNumbers,
+
+    // --- Caixa de entrada -------------------------------------------------
+    /**
+     * Palavra-passe da caixa de entrada. SEM ELA A CAIXA NAO EXISTE: as rotas
+     * respondem 404, como o /stats faz quando nao ha segredo. Melhor nao haver
+     * caixa nenhuma do que haver uma aberta a quem passar pelo endereco.
+     */
+    ADMIN_PASSWORD: optionalString,
+    /**
+     * Segredo partilhado entre os servicos dos dois bots. O servico que serve
+     * a pagina usa-o para ler os dados do outro, sem obrigar o browser a
+     * autenticar-se duas vezes nem a falar com duas origens.
+     */
+    INBOX_PROXY_SECRET: optionalString,
+    /** Endereco do servico do Ivan, para o proxy. Vazio = so ha um bot. */
+    IVAN_INBOX_URL: optionalString,
+    /** Nome deste bot na caixa de entrada. */
+    BOT_LABEL: optionalString,
   });
 
 export type Env = Omit<
@@ -219,6 +237,8 @@ export type Env = Omit<
    * inteira, por isso e dito em voz alta no arranque e no /health.
    */
   databaseIsEphemeral: boolean;
+  /** A caixa de entrada esta utilizavel: ha palavra-passe suficientemente longa. */
+  inboxEnabled: boolean;
 };
 
 /**
@@ -349,6 +369,9 @@ function load(): Env {
     // Um disco persistente do Render monta FORA da pasta da aplicacao
     // (/var/data, por exemplo). Um ficheiro dentro do cwd veio com o codigo e
     // vai-se embora com ele no deploy seguinte.
+    // 12 caracteres e o minimo para isto nao ser adivinhavel. Abaixo disso a
+    // caixa fica desligada em vez de ficar fraca.
+    inboxEnabled: (value.ADMIN_PASSWORD ?? '').length >= 12,
     databaseIsEphemeral:
       databaseFile !== ':memory:' &&
       !path.relative(process.cwd(), databaseFile).startsWith('..'),

@@ -105,7 +105,7 @@ function currentGeneration(chatId: number): number {
 }
 
 /** Invalida o que estiver em curso ou em fila para este chat. */
-function invalidateChat(chatId: number): void {
+export function invalidateChat(chatId: number): void {
   chatGenerations.set(chatId, currentGeneration(chatId) + 1);
 }
 
@@ -544,6 +544,21 @@ async function runFunnelTurn(
       return;
     }
 
+    // O operador assumiu esta conversa pela caixa de entrada. A mensagem do
+    // lead fica gravada, para ele a ver na app, mas a IA nao responde: duas
+    // vozes na mesma conversa e o que faz um lead desconfiar e bloquear.
+    //
+    // Fica ANTES do keepTyping, senao o lead via o "a escrever..." de uma
+    // resposta que nunca chega.
+    if (upsertLead({ chatId }).humanHandover) {
+      if (options.storeIncoming) {
+        addMessage({ chatId, role: 'user', content: incoming });
+      }
+
+      log.info(`turno do chat ${chatId} nao respondido: a conversa esta a ser levada a mao`);
+      return;
+    }
+
     const stopTyping = keepTyping(ctx);
 
     try {
@@ -673,6 +688,7 @@ bot.on([':photo', ':document'], async (ctx) => {
     chatId: lead.chatId,
     role: 'user',
     content: '[o lead enviou uma imagem; ninguem lhe respondeu e ainda nao se sabe o que ela mostra]',
+    author: 'sistema',
   });
 
   // Nenhuma resposta ao lead, de proposito. Ver o comentario no topo.

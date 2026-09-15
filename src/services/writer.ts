@@ -515,6 +515,7 @@ export async function writeReply(params: {
       id: 0,
       chatId: lead.chatId,
       role: 'user',
+      author: 'bot',
       content: incoming,
       directive: null,
       createdAt: new Date().toISOString(),

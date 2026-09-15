@@ -308,15 +308,29 @@ async function actualizarConversa(irAoFundo) {
     if (m.content.startsWith('[')) {
       return '<div class="marcador">' + escapar(m.content) + '</div>';
     }
+
     const nosso = m.role === 'assistant';
     const autor = nosso ? ({ humano: 'tu', sistema: 'automático' }[m.author] || 'bot') : '';
-    return (
-      '<div class="bolha ' + (nosso ? 'nossa ' + m.author : 'deles') + '">' +
-        escapar(m.content) +
-        '<div class="meta"><span>' + quando(m.createdAt) + '</span>' +
-        (autor ? '<span>' + autor + '</span>' : '') + '</div>' +
-      '</div>'
-    );
+
+    // Uma linha guardada na base de dados pode ter chegado ao lead como varias
+    // mensagens: o envio parte o texto pelas linhas em branco antes de o
+    // entregar. Sem repetir essa divisao aqui, a app mostrava um bloco unico
+    // onde o lead viu duas ou tres bolhas, e a conversa nao batia certo com a
+    // que ele tem no telemovel.
+    const partes = m.content.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+
+    return partes.map((parte, i) => {
+      // A hora vai so na ultima, como o Telegram faz num grupo de mensagens.
+      const meta = i === partes.length - 1
+        ? '<div class="meta"><span>' + quando(m.createdAt) + '</span>' +
+          (autor ? '<span>' + autor + '</span>' : '') + '</div>'
+        : '';
+      return (
+        '<div class="bolha ' + (nosso ? 'nossa ' + m.author : 'deles') + '">' +
+          escapar(parte) + meta +
+        '</div>'
+      );
+    }).join('');
   }).join('');
 
   const fundo = $('mensagens');

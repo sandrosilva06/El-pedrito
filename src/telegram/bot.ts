@@ -540,10 +540,15 @@ bot.on([':photo', ':document'], async (ctx) => {
       clearDepositPromise(lead.chatId);
 
       // Fica no historico para o estrategista nao voltar a pedir o comprovativo.
+      // O file_id vai junto para a caixa de entrada poder mostrar a imagem: ate
+      // aqui ele so existia em deposit_proofs, que a caixa nao le, e a conversa
+      // ficava com um marcador de texto onde o lead tinha mandado um print.
       addMessage({
         chatId: lead.chatId,
         role: 'user',
         content: '[o lead enviou um comprovativo de deposito]',
+        mediaFileId: fileId ?? null,
+        mediaKind: fileId ? (fileKind === 'photo' ? 'photo' : 'document') : null,
       });
     } catch (error) {
       // O registo falhou, mas a imagem existe e alguem tem de a ver. A copia
@@ -565,6 +570,17 @@ bot.on([':photo', ':document'], async (ctx) => {
   }
 
   if (!servesAsProof) {
+    if (fileId) {
+      addMessage({
+        chatId: lead.chatId,
+        role: 'user',
+        content: '[o lead enviou uma imagem]',
+        author: 'sistema',
+        mediaFileId: fileId,
+        mediaKind: fileKind === 'photo' ? 'photo' : 'document',
+      });
+    }
+
     await ctx.reply('Manda antes um print ou uma foto do comprovativo, se faz favor.');
     return;
   }

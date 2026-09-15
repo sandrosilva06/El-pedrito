@@ -689,6 +689,11 @@ bot.on([':photo', ':document'], async (ctx) => {
     role: 'user',
     content: '[o lead enviou uma imagem; ninguem lhe respondeu e ainda nao se sabe o que ela mostra]',
     author: 'sistema',
+    // O file_id vai junto para a caixa de entrada poder mostrar a imagem. Ate
+    // aqui ele so existia em deposit_proofs, que a caixa nao le, e a conversa
+    // ficava com um marcador de texto onde o lead tinha mandado um print.
+    mediaFileId: fileId,
+    mediaKind: fileKind === 'photo' ? 'photo' : 'document',
   });
 
   // Nenhuma resposta ao lead, de proposito. Ver o comentario no topo.

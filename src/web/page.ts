@@ -113,6 +113,37 @@ export const ADMIN_HTML = String.raw`<!doctype html>
     display: flex; gap: 8px; align-items: flex-end;
   }
   .compositor textarea { resize: none; max-height: 120px; }
+  .compositor .anexo {
+    background: none; border: 0; color: var(--fraco); font-size: 24px;
+    padding: 6px 4px; cursor: pointer; line-height: 1; flex-shrink: 0;
+  }
+
+  .bolha img {
+    display: block; max-width: 100%; border-radius: 10px; cursor: pointer;
+    background: var(--linha); min-height: 60px;
+  }
+  .bolha .legenda { margin-top: 6px; }
+
+  /* Pre-visualizacao antes de enviar */
+  #previa {
+    position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.92);
+    display: none; flex-direction: column; padding: 16px;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    padding-top: max(16px, env(safe-area-inset-top)); gap: 12px;
+  }
+  #previa.activo { display: flex; }
+  #previa .imagem { flex: 1; display: grid; place-items: center; min-height: 0; }
+  #previa img { max-width: 100%; max-height: 100%; border-radius: 10px; object-fit: contain; }
+  #previa .accoes { display: flex; gap: 8px; }
+  #previa .accoes .botao { flex: 1; }
+
+  /* Ver em grande */
+  #lupa {
+    position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.95);
+    display: none; place-items: center; padding: 12px;
+  }
+  #lupa.activo { display: grid; }
+  #lupa img { max-width: 100%; max-height: 100%; object-fit: contain; }
 
   .aviso { padding: 10px 12px; font-size: 13px; text-align: center; }
   .aviso.mao { background: var(--manual); color: #e8c86a; }
@@ -156,10 +187,24 @@ export const ADMIN_HTML = String.raw`<!doctype html>
   <div id="aviso-mao" class="aviso mao" hidden>Estás a levar esta conversa. O bot não responde.</div>
   <div class="mensagens" id="mensagens"></div>
   <div class="compositor">
+    <button class="anexo" id="anexar" title="Enviar imagem">📎</button>
+    <input type="file" id="ficheiro" accept="image/*" hidden>
     <textarea id="texto" rows="1" placeholder="Escrever…"></textarea>
     <button class="botao" id="enviar">Enviar</button>
   </div>
 </section>
+
+<div id="previa">
+  <div class="imagem"><img id="previa-img" alt=""></div>
+  <input type="text" id="previa-legenda" placeholder="Legenda (opcional)"
+         style="background:var(--painel);border:1px solid var(--linha);border-radius:10px;padding:11px 13px;">
+  <div class="accoes">
+    <button class="botao discreto" id="previa-cancelar">Cancelar</button>
+    <button class="botao" id="previa-enviar">Enviar imagem</button>
+  </div>
+</div>
+
+<div id="lupa"><img id="lupa-img" alt=""></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -319,17 +364,30 @@ async function actualizarConversa(irAoFundo) {
     // que ele tem no telemovel.
     const partes = m.content.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
 
-    return partes.map((parte, i) => {
-      // A hora vai so na ultima, como o Telegram faz num grupo de mensagens.
-      const meta = i === partes.length - 1
-        ? '<div class="meta"><span>' + quando(m.createdAt) + '</span>' +
-          (autor ? '<span>' + autor + '</span>' : '') + '</div>'
+    const classe = nosso ? 'nossa ' + m.author : 'deles';
+    const meta = '<div class="meta"><span>' + quando(m.createdAt) + '</span>' +
+      (autor ? '<span>' + autor + '</span>' : '') + '</div>';
+
+    // Mensagem com imagem: mostra a imagem e a legenda por baixo, se houver.
+    // O src aponta para o proxy do servidor, nunca para o Telegram: o URL de
+    // ficheiro deles leva o token do bot no caminho.
+    if (m.mediaFileId) {
+      const legenda = partes.length
+        ? '<div class="legenda">' + escapar(partes.join('\n\n')) + '</div>'
         : '';
       return (
-        '<div class="bolha ' + (nosso ? 'nossa ' + m.author : 'deles') + '">' +
-          escapar(parte) + meta +
+        '<div class="bolha ' + classe + '">' +
+          '<img loading="lazy" alt="imagem" src="/api' + prefixo + '/media/' +
+            encodeURIComponent(m.mediaFileId) + '" onclick="ampliar(this.src)">' +
+          legenda + meta +
         '</div>'
       );
+    }
+
+    return partes.map((parte, i) => {
+      // A hora vai so na ultima, como o Telegram faz num grupo de mensagens.
+      const metaAqui = i === partes.length - 1 ? meta : '';
+      return '<div class="bolha ' + classe + '">' + escapar(parte) + metaAqui + '</div>';
     }).join('');
   }).join('');
 
@@ -374,6 +432,105 @@ async function enviar() {
 }
 
 $('enviar').addEventListener('click', enviar);
+
+// --- imagens ---
+let imagemPronta = null;   // Blob ja reduzido, a espera de confirmacao
+
+/**
+ * Reduz a imagem antes de subir.
+ *
+ * Uma foto de telemovel tem 3 a 8 MB. Assim vai em centenas de kB: sobe num
+ * instante em dados moveis e fica longe do tecto de 10 MB do Telegram. Feito
+ * no canvas do proprio browser, sem biblioteca nenhuma.
+ */
+function reduzir(ficheiro, ladoMaximo = 1600, qualidade = 0.85) {
+  return new Promise((resolve, reject) => {
+    const leitor = new FileReader();
+    leitor.onerror = () => reject(new Error('não consegui ler o ficheiro'));
+    leitor.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('isso não parece uma imagem'));
+      img.onload = () => {
+        const escala = Math.min(1, ladoMaximo / Math.max(img.width, img.height));
+        const tela = document.createElement('canvas');
+        tela.width = Math.round(img.width * escala);
+        tela.height = Math.round(img.height * escala);
+        tela.getContext('2d').drawImage(img, 0, 0, tela.width, tela.height);
+        tela.toBlob(
+          (blob) => (blob ? resolve(blob) : reject(new Error('falhou a conversão'))),
+          'image/jpeg',
+          qualidade,
+        );
+      };
+      img.src = leitor.result;
+    };
+    leitor.readAsDataURL(ficheiro);
+  });
+}
+
+$('anexar').addEventListener('click', () => $('ficheiro').click());
+
+$('ficheiro').addEventListener('change', async (e) => {
+  const ficheiro = e.target.files?.[0];
+  e.target.value = '';           // permite escolher a mesma foto outra vez
+  if (!ficheiro) return;
+
+  try {
+    imagemPronta = await reduzir(ficheiro);
+    $('previa-img').src = URL.createObjectURL(imagemPronta);
+    $('previa-legenda').value = $('texto').value.trim();
+    $('previa').classList.add('activo');
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+$('previa-cancelar').addEventListener('click', () => {
+  imagemPronta = null;
+  $('previa').classList.remove('activo');
+});
+
+$('previa-enviar').addEventListener('click', async () => {
+  if (!imagemPronta || chatAberto === null) return;
+
+  const botao = $('previa-enviar');
+  botao.disabled = true;
+  botao.textContent = 'A enviar…';
+
+  try {
+    const legenda = encodeURIComponent($('previa-legenda').value.trim());
+    const r = await fetch(
+      '/api' + prefixo + '/leads/' + chatAberto + '/image?caption=' + legenda,
+      {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'image/jpeg' },
+        body: imagemPronta,
+      },
+    );
+
+    const corpo = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(corpo.error || ('erro ' + r.status));
+
+    imagemPronta = null;
+    $('previa').classList.remove('activo');
+    $('texto').value = '';
+    $('texto').style.height = 'auto';
+    await actualizarConversa(true);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = 'Enviar imagem';
+  }
+});
+
+function ampliar(src) {
+  $('lupa-img').src = src;
+  $('lupa').classList.add('activo');
+}
+
+$('lupa').addEventListener('click', () => $('lupa').classList.remove('activo'));
 $('texto').addEventListener('input', (e) => {
   e.target.style.height = 'auto';
   e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';

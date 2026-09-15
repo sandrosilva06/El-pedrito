@@ -98,6 +98,10 @@ export interface StoredMessage {
   role: MessageRole;
   author: MessageAuthor;
   content: string;
+  /** file_id do Telegram, quando a mensagem leva uma imagem. */
+  mediaFileId: string | null;
+  /** Por agora so "photo". Fica como campo para nao ter de migrar outra vez. */
+  mediaKind: string | null;
   directive: string | null;
   createdAt: string;
 }
@@ -172,6 +176,8 @@ interface MessageRow {
   role: string;
   author: string | null;
   content: string;
+  media_file_id: string | null;
+  media_kind: string | null;
   directive: string | null;
   created_at: string;
 }
@@ -263,6 +269,12 @@ addColumnIfMissing('leads', 'betting_experience', 'TEXT');
 addColumnIfMissing('leads', 'human_handover', 'INTEGER NOT NULL DEFAULT 0');
 // Quem compos a mensagem. Ver MessageAuthor.
 addColumnIfMissing('messages', 'author', "TEXT NOT NULL DEFAULT 'bot'");
+// Media anexada a mensagem. Guarda-se o file_id do Telegram e nao os bytes: e
+// o Telegram que aloja o ficheiro, e o id chega para o voltar a pedir ou a
+// reenviar. O deposit_proofs continua a ser a tabela de validacao; isto e para
+// a conversa poder mostrar o que foi trocado.
+addColumnIfMissing('messages', 'media_file_id', 'TEXT');
+addColumnIfMissing('messages', 'media_kind', 'TEXT');
 
 /**
  * Updates do Telegram ja processados.
@@ -364,6 +376,8 @@ function mapMessage(row: MessageRow): StoredMessage {
     // Linhas gravadas antes da coluna existir ficam com NULL e sao do bot.
     author: row.author === 'humano' || row.author === 'sistema' ? row.author : 'bot',
     content: row.content,
+    mediaFileId: row.media_file_id,
+    mediaKind: row.media_kind,
     directive: row.directive,
     createdAt: row.created_at,
   };
@@ -393,7 +407,8 @@ const statements = {
      WHERE chat_id = ?
   `),
   insertMessage: db.prepare(`
-    INSERT INTO messages (chat_id, role, author, content, directive) VALUES (?, ?, ?, ?, ?)
+    INSERT INTO messages (chat_id, role, author, content, media_file_id, media_kind, directive)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `),
   /**
    * Lista para a caixa de entrada: o lead, a ultima mensagem e quando foi.
@@ -701,6 +716,9 @@ export function addMessage(input: {
   directive?: string | null;
   /** Omitido significa `bot`, que era o unico caso antes desta coluna existir. */
   author?: MessageAuthor;
+  /** file_id do Telegram, quando a mensagem leva uma imagem. */
+  mediaFileId?: string | null;
+  mediaKind?: string | null;
 }): void {
   inTransaction(() => {
     statements.insertMessage.run(
@@ -708,6 +726,8 @@ export function addMessage(input: {
       input.role,
       input.author ?? 'bot',
       input.content,
+      input.mediaFileId ?? null,
+      input.mediaKind ?? (input.mediaFileId ? 'photo' : null),
       input.directive ?? null,
     );
     statements.bumpMessageCount.run(input.chatId);

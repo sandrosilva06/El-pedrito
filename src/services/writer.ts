@@ -517,6 +517,8 @@ export async function writeReply(params: {
       role: 'user',
       author: 'bot',
       content: incoming,
+      mediaFileId: null,
+      mediaKind: null,
       directive: null,
       createdAt: new Date().toISOString(),
     },

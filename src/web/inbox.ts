@@ -13,6 +13,7 @@ import {
   setHumanHandover,
 } from '../db/database';
 import { bot, invalidateChat } from '../telegram/bot';
+import { persona } from '../personas';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('inbox');
@@ -214,7 +215,10 @@ export function createInboxRouter(): Router {
 
   /** Que bots a caixa conhece. O primeiro e sempre este servico. */
   router.get('/bots', (_req, res) => {
-    const bots = [{ id: 'local', label: env.BOT_LABEL ?? env.AGENT_NAME, prefix: '' }];
+    // A etiqueta vem da persona activa e nao do AGENT_NAME: neste servico o
+    // AGENT_NAME nao esta definido e cairia no default "El Pedrito", que e o
+    // outro bot. O BOT_LABEL continua a mandar quando existe.
+    const bots = [{ id: 'local', label: env.BOT_LABEL ?? persona.agentName, prefix: '' }];
 
     if (env.IVAN_INBOX_URL && env.INBOX_PROXY_SECRET) {
       bots.push({ id: 'ivan', label: 'Ivan Rodrigues', prefix: '/ivan' });

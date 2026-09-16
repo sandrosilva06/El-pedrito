@@ -1,5 +1,6 @@
 import { env } from '../config/env';
 import {
+  addMessage,
   claimRemarketingSlot,
   clearDepositPromise,
   getDuePromises,
@@ -84,11 +85,18 @@ async function sendToAudience(
 }
 
 async function sendOne(lead: Lead, template: string): Promise<boolean> {
+  const text = personalise(template, lead.firstName);
+
   try {
-    await bot.api.sendMessage(lead.chatId, personalise(template, lead.firstName), {
+    await bot.api.sendMessage(lead.chatId, text, {
       link_preview_options: { is_disabled: true },
     });
 
+    // Gravado no historico depois de entregue. Sem isto o lead via no telemovel
+    // mensagens que nao existiam em lado nenhum: a caixa de entrada mostrava
+    // uma conversa diferente da real, e as IAs tambem nao sabiam o que ja lhe
+    // tinha sido dito.
+    addMessage({ chatId: lead.chatId, role: 'assistant', content: text, author: 'sistema' });
     markRemarketed(lead.chatId);
     return true;
   } catch (error) {

@@ -44,6 +44,19 @@ const STAGE_ORDER = new Map<FunnelStage, number>(
 
 export type MessageRole = 'user' | 'assistant';
 
+/**
+ * Quem escreveu a mensagem, para a caixa de entrada poder distinguir.
+ *
+ * O `role` diz de que LADO veio; isto diz QUEM a compos. Sem esta separacao
+ * nao se distingue o que a IA escreveu do que o operador escreveu a mao, e a
+ * conversa fica impossivel de auditar.
+ *
+ * - `bot`     — a cadeia estrategista/redator, ou um texto fixo do funil
+ * - `humano`  — o operador, pela caixa de entrada
+ * - `sistema` — remarketing, lembretes e marcadores de acontecimentos
+ */
+export type MessageAuthor = 'bot' | 'humano' | 'sistema';
+
 export interface Lead {
   chatId: number;
   /** Quando o lead disse que ia tratar disto (UTC), ou null. */
@@ -58,6 +71,16 @@ export interface Lead {
   stage: FunnelStage;
   notes: string | null;
   messageCount: number;
+  /** O operador assumiu a conversa: a IA nao responde a este lead. */
+  humanHandover: boolean;
+  /** O lead bloqueou o bot. */
+  blocked: boolean;
+  /** Quantos toques de remarketing ja levou. */
+  remarketingTouches: number;
+  /** Ultimo toque de remarketing, ou null. */
+  lastRemarketingAt: string | null;
+  /** Respondeu a um toque e saiu da campanha. */
+  remarketingCancelled: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -66,6 +89,7 @@ export interface StoredMessage {
   id: number;
   chatId: number;
   role: MessageRole;
+  author: MessageAuthor;
   content: string;
   directive: string | null;
   createdAt: string;
@@ -125,6 +149,11 @@ interface LeadRow {
   stage: string;
   notes: string | null;
   message_count: number;
+  human_handover: number;
+  blocked: number;
+  remarketing_touches: number;
+  last_remarketing_at: string | null;
+  remarketing_cancelled: number;
   created_at: string;
   updated_at: string;
 }
@@ -133,6 +162,7 @@ interface MessageRow {
   id: number;
   chat_id: number;
   role: string;
+  author: string | null;
   content: string;
   directive: string | null;
   created_at: string;
@@ -216,6 +246,34 @@ addColumnIfMissing('leads', 'promise_note', 'TEXT');
 // Cantao onde o lead vive. Primeira classe, e nao dentro das notas, porque a
 // regra de nao voltar a perguntar precisa de o consultar deterministicamente.
 addColumnIfMissing('leads', 'canton', 'TEXT');
+// Lead que respondeu a um toque de remarketing: sai da campanha de vez. Sem
+// isto o filtro por `updated_at` so adiava, e passada a janela a pessoa que ja
+// tinha respondido voltava a entrar na lista.
+addColumnIfMissing('leads', 'remarketing_cancelled', 'INTEGER NOT NULL DEFAULT 0');
+addColumnIfMissing('leads', 'betting_experience', 'TEXT');
+// O operador assumiu a conversa pela caixa de entrada: a IA cala-se.
+addColumnIfMissing('leads', 'human_handover', 'INTEGER NOT NULL DEFAULT 0');
+// Quem compos a mensagem. Ver MessageAuthor.
+addColumnIfMissing('messages', 'author', "TEXT NOT NULL DEFAULT 'bot'");
+
+/**
+ * Updates do Telegram ja processados.
+ *
+ * Quando o servico demora a responder — no Render acontece sempre que acorda
+ * de hibernacao — o Telegram nao recebe o 200 a tempo e REENVIA o mesmo
+ * update. Sem esta marca, o mesmo /start era processado duas vezes e o lead
+ * recebia a conversa a dobrar, ou a saudacao seguida da resposta de quem
+ * volta.
+ *
+ * Fica em disco e nao em memoria de proposito: o reenvio acontece justamente
+ * a volta de um reinicio, que e quando a memoria se perde.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS processed_updates (
+    update_id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS remarketing_runs (
@@ -279,6 +337,11 @@ function mapLead(row: LeadRow): Lead {
     stage: toStage(row.stage),
     notes: row.notes,
     messageCount: row.message_count,
+    humanHandover: row.human_handover === 1,
+    blocked: row.blocked === 1,
+    remarketingTouches: row.remarketing_touches,
+    lastRemarketingAt: row.last_remarketing_at,
+    remarketingCancelled: row.remarketing_cancelled === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -289,6 +352,8 @@ function mapMessage(row: MessageRow): StoredMessage {
     id: row.id,
     chatId: row.chat_id,
     role: row.role === 'assistant' ? 'assistant' : 'user',
+    // Linhas gravadas antes da coluna existir ficam com NULL e sao do bot.
+    author: row.author === 'humano' || row.author === 'sistema' ? row.author : 'bot',
     content: row.content,
     directive: row.directive,
     createdAt: row.created_at,
@@ -319,7 +384,54 @@ const statements = {
      WHERE chat_id = ?
   `),
   insertMessage: db.prepare(`
-    INSERT INTO messages (chat_id, role, content, directive) VALUES (?, ?, ?, ?)
+    INSERT INTO messages (chat_id, role, author, content, directive) VALUES (?, ?, ?, ?, ?)
+  `),
+  /**
+   * Lista para a caixa de entrada: o lead, a ultima mensagem e quando foi.
+   *
+   * As queries que ja existiam (targetsNotConverted, targetsVip, duePromises)
+   * trazem filtros de remarketing embutidos e nao servem aqui: a caixa de
+   * entrada quer TODOS os leads, bloqueados e convertidos incluidos.
+   *
+   * O filtro de texto e sempre passado; quando vem vazio, o LIKE '%%' deixa
+   * passar tudo, o que evita ter duas variantes da mesma query.
+   */
+  inboxLeads: db.prepare(`
+    SELECT l.*,
+           (SELECT content    FROM messages m WHERE m.chat_id = l.chat_id ORDER BY m.id DESC LIMIT 1) AS last_content,
+           (SELECT role       FROM messages m WHERE m.chat_id = l.chat_id ORDER BY m.id DESC LIMIT 1) AS last_role,
+           (SELECT created_at FROM messages m WHERE m.chat_id = l.chat_id ORDER BY m.id DESC LIMIT 1) AS last_at,
+           (SELECT id         FROM messages m WHERE m.chat_id = l.chat_id ORDER BY m.id DESC LIMIT 1) AS last_id
+      FROM leads l
+     WHERE (? = '' OR lower(coalesce(l.first_name, '') || ' ' || coalesce(l.username, '')) LIKE '%' || ? || '%')
+       AND (? = '' OR l.stage = ?)
+     -- O created_at do SQLite so tem precisao ao segundo, portanto duas
+     -- conversas activas no mesmo segundo empatam. O id da mensagem e
+     -- estritamente crescente e desempata sempre pela mais recente.
+     ORDER BY coalesce(last_at, l.updated_at) DESC, coalesce(last_id, 0) DESC
+     LIMIT ? OFFSET ?
+  `),
+  countInboxLeads: db.prepare(`
+    SELECT COUNT(*) AS total
+      FROM leads l
+     WHERE (? = '' OR lower(coalesce(l.first_name, '') || ' ' || coalesce(l.username, '')) LIKE '%' || ? || '%')
+       AND (? = '' OR l.stage = ?)
+  `),
+  /**
+   * Historico completo, paginado para tras a partir de um id.
+   *
+   * O getRecentMessages so devolve a janela de memoria das IAs (tecto de 100);
+   * aqui quer-se a conversa toda, que pode ser bem maior.
+   */
+  messagesPage: db.prepare(`
+    SELECT * FROM (
+      SELECT * FROM messages
+       WHERE chat_id = ? AND (? = 0 OR id < ?)
+       ORDER BY id DESC LIMIT ?
+    ) ORDER BY id ASC
+  `),
+  setHandover: db.prepare(`
+    UPDATE leads SET human_handover = ?, updated_at = datetime('now') WHERE chat_id = ?
   `),
   recentMessages: db.prepare(`
     SELECT * FROM (
@@ -553,11 +665,14 @@ export function addMessage(input: {
   role: MessageRole;
   content: string;
   directive?: string | null;
+  /** Omitido significa `bot`, que era o unico caso antes desta coluna existir. */
+  author?: MessageAuthor;
 }): void {
   inTransaction(() => {
     statements.insertMessage.run(
       input.chatId,
       input.role,
+      input.author ?? 'bot',
       input.content,
       input.directive ?? null,
     );
@@ -569,6 +684,80 @@ export function addMessage(input: {
 export function getRecentMessages(chatId: number, limit = env.HISTORY_WINDOW): StoredMessage[] {
   const rows = asRows<MessageRow>(statements.recentMessages.all(chatId, limit));
   return rows.map(mapMessage);
+}
+
+export interface InboxLead extends Lead {
+  /** Ultima mensagem da conversa, para a pre-visualizacao na lista. */
+  lastContent: string | null;
+  lastRole: MessageRole | null;
+  lastAt: string | null;
+}
+
+/**
+ * Lista de conversas para a caixa de entrada, da mais recente para a mais
+ * antiga. Ao contrario das listas de remarketing, nao esconde ninguem.
+ */
+export function listInboxLeads(params: {
+  search?: string;
+  stage?: string;
+  limit?: number;
+  offset?: number;
+}): { leads: InboxLead[]; total: number } {
+  const search = (params.search ?? '').trim().toLowerCase();
+  const stage = (params.stage ?? '').trim();
+  const limit = Math.min(Math.max(params.limit ?? 30, 1), 100);
+  const offset = Math.max(params.offset ?? 0, 0);
+
+  type Row = LeadRow & {
+    last_content: string | null;
+    last_role: string | null;
+    last_at: string | null;
+    last_id: number | null;
+  };
+
+  const rows = asRows<Row>(
+    statements.inboxLeads.all(search, search, stage, stage, limit, offset),
+  );
+  const count = asRow<{ total: number }>(
+    statements.countInboxLeads.get(search, search, stage, stage),
+  );
+
+  return {
+    leads: rows.map((row) => ({
+      ...mapLead(row),
+      lastContent: row.last_content,
+      lastRole: row.last_role === null ? null : row.last_role === 'assistant' ? 'assistant' : 'user',
+      lastAt: row.last_at,
+    })),
+    total: count?.total ?? 0,
+  };
+}
+
+/**
+ * Historico completo de um chat, em ordem cronologica.
+ *
+ * `before` e o id a partir do qual se pagina para tras; 0 significa "do fim".
+ */
+export function getMessagesPage(
+  chatId: number,
+  params: { before?: number; limit?: number } = {},
+): StoredMessage[] {
+  const before = params.before ?? 0;
+  const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
+
+  return asRows<MessageRow>(statements.messagesPage.all(chatId, before, before, limit)).map(
+    mapMessage,
+  );
+}
+
+/**
+ * Liga ou desliga o controlo manual da conversa.
+ *
+ * Ligado, o funil grava o que o lead escreve mas nao responde: a conversa
+ * passa a ser do operador ate ele a devolver ao bot.
+ */
+export function setHumanHandover(chatId: number, enabled: boolean): void {
+  statements.setHandover.run(enabled ? 1 : 0, chatId);
 }
 
 /** Apaga o historico do chat, mantendo o lead (usado pelo /reset). */

@@ -7,6 +7,8 @@ import { env, isProduction } from './config/env';
 import { closeDatabase, getStats } from './db/database';
 import { startRemarketingScheduler, stopRemarketingScheduler } from './scheduler/remarketing';
 import { BOT_COMMANDS, bot } from './telegram/bot';
+import { createInboxRouter } from './web/inbox';
+import { ADMIN_HTML } from './web/page';
 import { createLogger } from './utils/logger';
 
 const log = createLogger('server');
@@ -68,6 +70,25 @@ app.get('/stats', (req, res) => {
 
   res.json(getStats());
 });
+
+/**
+ * Caixa de entrada privada.
+ *
+ * So existe se houver ADMIN_PASSWORD. Sem ela nao se monta nada e o catch-all
+ * responde 404: uma caixa de entrada sem palavra-passe seria pior do que nao
+ * haver caixa nenhuma, porque o endereco acaba sempre por circular.
+ */
+if (env.inboxEnabled) {
+  app.get('/admin', (_req, res) => {
+    res.type('html').send(ADMIN_HTML);
+  });
+
+  app.use('/api', createInboxRouter());
+} else {
+  log.warn(
+    'caixa de entrada desligada: define ADMIN_PASSWORD (12+ caracteres) para a activar em /admin',
+  );
+}
 
 // ATENCAO ao mexer aqui: webhookCallback() nao apenas devolve um handler —
 // ele substitui bot.start por uma funcao que lanca, no momento em que e

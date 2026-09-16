@@ -63,6 +63,31 @@ function enqueue(chatId: number, task: () => Promise<void>): Promise<void> {
   return next;
 }
 
+/**
+ * Geracao da conversa de cada chat.
+ *
+ * O /parar e o /reset apagam a conversa no instante em que chegam, mas um
+ * turno que ja esteja em curso ou a espera na fila so termina depois. Ao
+ * terminar, voltava a criar o lead, gravava a resposta e enviava-a, por cima
+ * de quem tinha acabado de pedir para nao ser incomodado. O lead ficava
+ * ressuscitado, e o /start seguinte tratava-o como conhecido em vez de lhe dar
+ * as boas-vindas.
+ *
+ * Cada turno guarda a geracao com que entrou e desiste se ela mudar pelo
+ * caminho. So aqui ficam os chats que alguma vez pararam, por isso o mapa nao
+ * cresce com o numero de leads.
+ */
+const chatGenerations = new Map<number, number>();
+
+function currentGeneration(chatId: number): number {
+  return chatGenerations.get(chatId) ?? 0;
+}
+
+/** Invalida o que estiver em curso ou em fila para este chat. */
+export function invalidateChat(chatId: number): void {
+  chatGenerations.set(chatId, currentGeneration(chatId) + 1);
+}
+
 /** Rate limit simples em memoria, por chat. */
 const rateBuckets = new Map<number, number[]>();
 
@@ -234,6 +259,7 @@ bot.command('reset', async (ctx) => {
   const lead = leadFromContext(ctx);
   if (!lead) return;
 
+  invalidateChat(lead.chatId);
   clearHistory(lead.chatId);
   setNotes(lead.chatId, null);
   await ctx.reply('Pronto, limpei a nossa conversa. Diz-me o que queres saber.');
@@ -243,6 +269,9 @@ bot.command('parar', async (ctx) => {
   const chatId = ctx.chat?.id;
   if (chatId === undefined) return;
 
+  // Antes de apagar: o que estiver em fila fica invalido e nao volta a gravar
+  // nada nem a falar com quem pediu para parar.
+  invalidateChat(chatId);
   forgetLead(chatId);
   await ctx.reply(
     'Sem problema, não te volto a incomodar. Apaguei a nossa conversa. ' +
@@ -365,7 +394,32 @@ async function runFunnelTurn(
   incoming: string,
   options: { storeIncoming: boolean },
 ): Promise<void> {
+  // Lida ANTES de entrar na fila: e a geracao do momento em que o lead falou,
+  // e nao a de quando o turno chegar a sua vez.
+  const generation = currentGeneration(chatId);
+
   await enqueue(chatId, async () => {
+    // A conversa foi apagada enquanto este turno esperava na fila.
+    if (currentGeneration(chatId) !== generation) {
+      log.info(`turno do chat ${chatId} descartado: a conversa foi apagada entretanto`);
+      return;
+    }
+
+    // O operador assumiu esta conversa pela caixa de entrada. A mensagem do
+    // lead fica gravada, para ele a ver na app, mas a IA nao responde: duas
+    // vozes na mesma conversa e o que faz um lead desconfiar e bloquear.
+    //
+    // Fica ANTES do keepTyping, senao o lead via o "a escrever..." de uma
+    // resposta que nunca chega.
+    if (upsertLead({ chatId }).humanHandover) {
+      if (options.storeIncoming) {
+        addMessage({ chatId, role: 'user', content: incoming });
+      }
+
+      log.info(`turno do chat ${chatId} nao respondido: a conversa esta a ser levada a mao`);
+      return;
+    }
+
     const stopTyping = keepTyping(ctx);
 
     try {

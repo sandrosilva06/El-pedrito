@@ -107,7 +107,12 @@ export function linkAllowed(turn: number, stage: SalesDirective['stage']): boole
   return !early || turn >= 5;
 }
 
-function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number): string {
+/**
+ * Exportada para o prompt poder ser lido num teste. As regras que mais custam
+ * errar — o encerramento, a fase, o link — vivem aqui, e verifica-las so por
+ * observacao das respostas e caro e lento.
+ */
+export function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number): string {
   const sendLink = directive.includeLink && linkAllowed(turn, directive.stage);
   const link = resolveHouseLink(persona, directive.affiliateHouse);
 
@@ -125,8 +130,17 @@ function buildDirectiveBlock(directive: SalesDirective, lead: Lead, turn: number
       ? `Ao mandar o link, fecha a mensagem com este aviso, em linha separada: "${persona.complianceNote}"`
       : 'Nao e preciso repetir o aviso legal nesta mensagem.';
 
+  // Encerramento curto e sem sermao. Um lead que ouve "o meu conselho sincero e
+  // que nao te metas nisto" nao fica agradecido: fica tratado como coitado, e
+  // essa mensagem sai por engano muito mais vezes do que devia. Se ha mesmo
+  // razao para parar, para-se em duas linhas e sem dar licoes de vida.
   const stopRule = directive.shouldStop
-    ? 'ENCERRAMENTO: agradece, respeita a decisao do lead, diz que ele pode voltar a falar quando quiser e NAO faças nenhuma oferta nem pergunta de vendas.'
+    ? 'ENCERRAMENTO: no maximo DUAS frases curtas. Diz que assim nao e, que ' +
+      'fica para outra altura, e que a porta esta aberta. PROIBIDO dar ' +
+      'conselhos de vida, dizer-lhe o que devia fazer primeiro, comentar as ' +
+      'escolhas dele, falar em riscos, em prioridades, em orientar a vida ou ' +
+      'em ele ficar mais apertado. Nada de sermao e nada de pena. NAO faças ' +
+      'nenhuma oferta nem pergunta de vendas.'
     : `PROXIMO PASSO: ${directive.cta}`;
 
   const phase = phaseRule(turn, directive.stage);

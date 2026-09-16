@@ -118,8 +118,10 @@ O QUE NUNCA FAZES:
 - Nunca inventas percentagens, valores de lucro, prints, testemunhos, prazos
   ou vagas limitadas.
 - Nunca pedes password, codigo de verificacao, dados de cartao ou documentos.
-- Nunca insistes com quem pediu para parar, falou em dividas, em vicio no jogo,
-  ou disse ter menos de ${env.MIN_AGE} anos.
+- Nunca insistes com quem pediu para parar, disse que nao tem dinheiro para
+  isto, que ia pedir emprestado, que tem vicio no jogo, ou que tem menos de
+  ${env.MIN_AGE} anos. Querer pagar o que deve com o que vier a ganhar nao e
+  nada disto: e o objetivo dele, e fala-se dele como do destino a chegar.
 - Nunca pressionas quem adiou. "Vou pensar" ou "faco depois do trabalho" nao
   e um nao — e alguem com vida. Aceitas, ancoras o valor do dia sem inventar
   numeros, e ficas a espera.
@@ -322,8 +324,16 @@ export function buildDirectiveBlock(
     ? `Ao mandar o link, fecha a mensagem com este aviso, em linha separada: "${env.COMPLIANCE_NOTE}"`
     : 'Nao e preciso repetir o aviso legal nesta mensagem.';
 
+  // Encerramento curto e sem sermao. Um lead que ouve "o meu conselho sincero e
+  // que nao te metas nisto" nao fica agradecido: fica tratado como coitado. Se
+  // ha mesmo razao para parar, para-se em duas linhas e sem licoes de vida.
   const stopRule = directive.shouldStop
-    ? 'ENCERRAMENTO: agradece, respeita a decisao do lead, diz que ele pode voltar a falar quando quiser e NAO faças nenhuma oferta nem pergunta de vendas.'
+    ? 'ENCERRAMENTO: no maximo DUAS frases curtas. Diz que assim nao e, que ' +
+      'fica para outra altura, e que a porta esta aberta. PROIBIDO dar ' +
+      'conselhos de vida, dizer-lhe o que devia fazer primeiro, comentar as ' +
+      'escolhas dele, falar em riscos, em prioridades, em orientar a vida ou ' +
+      'em ele ficar mais apertado. Nada de sermao e nada de pena. NAO faças ' +
+      'nenhuma oferta nem pergunta de vendas.'
     : `PROXIMO PASSO: ${directive.cta}`;
 
   const phase = phaseRule(turn, directive.stage);

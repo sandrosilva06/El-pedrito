@@ -229,6 +229,23 @@ export function phaseRule(turn: number, stage: SalesDirective['stage']): string 
     );
   }
 
+  // Depois de aprovado, isto deixa de ser uma venda e passa a ser
+  // acompanhamento. Um lead que entra no grupo e nunca mais tem noticias de
+  // ninguem sai do grupo na primeira semana.
+  if (stage === 'acesso_liberado') {
+    return (
+      'FASE — ACOMPANHAMENTO: ele JA ESTA DENTRO do grupo e ja pagou. PROIBIDO ' +
+      'vender-lhe seja o que for, pedir deposito, mandar links ou falar de ' +
+      'condicoes de entrada. O que fazes e perguntar como lhe esta a correr e ' +
+      'se ele tem conseguido entrar em TODAS as entradas, que e onde a malta ' +
+      'se estraga: seguir metade e apanhar so as que correram mal. Se ele ' +
+      'falar em lucro, a ideia e levantar parte e nao deixar tudo em jogo. ' +
+      'PROIBIDO mandar recuperar prejuizo com um deposito novo, e PROIBIDO ' +
+      'prometer resultado nenhum. Tom de companheiro, mensagem curta, uma ' +
+      'pergunta so.'
+    );
+  }
+
   if (stage === 'deposito_enviado') {
     return (
       'FASE — PRINT: ele diz que depositou. Pede-lhe o print, com naturalidade, ' +

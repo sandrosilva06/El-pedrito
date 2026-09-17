@@ -424,10 +424,15 @@ $('alternar-afixar').addEventListener('click', async () => {
 // grupo, sai das campanhas de venda e entra no acompanhamento VIP.
 $('alternar-vip').addEventListener('click', async () => {
   const aprovado = leadAberto?.stage !== 'acesso_liberado';
+
+  // Aprovar manda o link do grupo ao lead. Nao e coisa para sair por engano
+  // num toque distraido na lista.
+  if (aprovado && !confirm('Aprovar e enviar-lhe já o link do grupo VIP?')) return;
+
   await api('/leads/' + chatAberto + '/aprovar', {
     method: 'POST', body: JSON.stringify({ aprovado }),
   });
-  await actualizarConversa(false);
+  await actualizarConversa(true);
   carregarLista();
 });
 

@@ -209,6 +209,28 @@ const schema = z
      * acompanhamento VIP e no topo da caixa de entrada.
      */
     VIP_CHAT_IDS: optionalString,
+    /**
+     * Backup da base de dados para o canal de controlo, de hora a hora.
+     *
+     * Ligado por omissao: enquanto o disco nao estiver montado, e a unica coisa
+     * entre um deploy e perder a base de leads inteira. Desliga-se com
+     * BACKUP_ENABLED=false quando houver disco a serio.
+     */
+    BACKUP_ENABLED: optionalString.transform((value) => value !== 'false'),
+    /** Intervalo entre backups, em minutos. */
+    BACKUP_INTERVAL_MINUTES: intFromString(60, 5, 1440),
+    /**
+     * Repor no arranque os leads que os deploys apagaram, reconstruidos a
+     * partir dos logs de producao. Idempotente; desliga-se com
+     * RECOVER_LEADS=false quando ja nao fizer falta.
+     */
+    RECOVER_LEADS: optionalString.transform((value) => value !== 'false'),
+    /**
+     * Link de convite do grupo VIP, entregue ao lead quando eu carrego em
+     * "Aprovar". E o unico sitio do sistema onde este link sai, de proposito:
+     * o acesso e uma decisao minha, tomada depois de validar o deposito.
+     */
+    VIP_GROUP_LINK: optionalString.transform((value) => value ?? 'https://t.me/+aTgtTQdqcThjNTk0'),
 
     // --- Caixa de entrada -------------------------------------------------
     /**

@@ -15,7 +15,7 @@ import {
   setStage,
   type FunnelStage,
 } from '../db/database';
-import { bot, invalidateChat } from '../telegram/bot';
+import { bot, invalidateChat, resumeWithAi, sendVipWelcome } from '../telegram/bot';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('inbox');
@@ -459,7 +459,13 @@ export function createInboxRouter(): Router {
     if (enabled) invalidateChat(chatId);
 
     log.info(`chat ${chatId}: controlo manual ${enabled ? 'ligado' : 'desligado'}`);
-    res.json({ ok: true, humanHandover: enabled });
+
+    // Devolver ao bot nao pode ser so levantar o travao: se o lead ficou a
+    // espera de resposta, ela tem de sair agora. O historico que a IA recebe
+    // inclui o que eu escrevi a mao, portanto ela continua de onde eu deixei.
+    const respondeu = enabled ? false : resumeWithAi(chatId);
+
+    res.json({ ok: true, humanHandover: enabled, respondeu });
   });
 
   /** Afixar no topo da lista. Nao mexe no funil: e so para nao se perder. */
@@ -496,7 +502,28 @@ export function createInboxRouter(): Router {
 
     setStage(chatId, stage);
     log.info(`chat ${chatId}: marcado como ${stage} a mao`);
-    res.json({ ok: true, stage });
+
+    if (!aprovado) {
+      res.json({ ok: true, stage, linkEnviado: false });
+      return;
+    }
+
+    // Aprovar devolve a conversa a IA: a partir daqui ela trata de duvidas de
+    // acesso e do acompanhamento. A foto dele tinha-a passado para a minha
+    // mao, e se isso ficasse ligado o lead nao voltava a ter resposta.
+    setHumanHandover(chatId, false);
+
+    const lead = getLead(chatId);
+    if (!lead) {
+      res.status(404).json({ error: 'lead desconhecido' });
+      return;
+    }
+
+    void sendVipWelcome(lead).then((linkEnviado) => {
+      if (!linkEnviado) log.error(`chat ${chatId}: aprovado mas o link nao saiu`);
+    });
+
+    res.json({ ok: true, stage, linkEnviado: true });
   });
 
   // --- O outro bot ---------------------------------------------------------

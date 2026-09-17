@@ -739,11 +739,18 @@ bot.on([':photo', ':document'], async (ctx) => {
     mediaKind: fileKind === 'photo' ? 'photo' : 'document',
   });
 
+  // Uma imagem e quase sempre um comprovativo, e um comprovativo e uma decisao
+  // minha: valido o pagamento fora do que o bot ve. A IA fica calada nesta
+  // conversa ate eu decidir, para nao confirmar acessos que nao dei nem
+  // mandar o lead repetir um passo que ele ja fez.
+  setHumanHandover(lead.chatId, true);
+  invalidateChat(lead.chatId);
+
   // Nenhuma resposta ao lead, de proposito. Ver o comentario no topo.
   log.info(
     `imagem #${proof.id} recebida — chat=${lead.chatId} nome=${lead.firstName ?? '?'} ` +
       `username=${lead.username ? '@' + lead.username : '?'} ` +
-      'reencaminhada para validacao, sem resposta ao lead',
+      'reencaminhada para validacao, conversa passada para a mao',
   );
 
   await notifyAdmins(proof.id, lead, fileId, fileKind);
@@ -753,6 +760,90 @@ bot.on([':photo', ':document'], async (ctx) => {
  * Encaminha o comprovativo a quem valida. Sem isto o registo ficaria so na base
  * de dados e o lead esperaria por alguem que nao sabe que ele existe.
  */
+/**
+ * Contexto minimo para correr um turno fora do Telegram.
+ *
+ * O turno do funil so precisa de duas coisas do ctx: mandar mensagem e mandar
+ * o "a escrever...". Quando sou eu a devolver a conversa ao bot pela caixa de
+ * entrada nao ha update nenhum do Telegram, e portanto nao ha ctx — isto faz
+ * de ponte para a api, ligada a este chat.
+ */
+function contextoParaChat(chatId: number): Context {
+  return {
+    chat: { id: chatId, type: 'private' },
+    reply: (text: string, other?: Record<string, unknown>) =>
+      bot.api.sendMessage(chatId, text, other as never),
+    replyWithChatAction: (action: string) =>
+      bot.api.sendChatAction(chatId, action as never),
+  } as unknown as Context;
+}
+
+/**
+ * Devolve a conversa a IA e faz com que ela responda JA a ultima coisa que o
+ * lead disse.
+ *
+ * Sem isto, desligar o modo manual nao fazia nada de visivel: o bot so voltava
+ * a falar quando o lead escrevesse outra vez, e um lead que ficou a espera de
+ * resposta nao escreve outra vez — desaparece.
+ *
+ * O historico que vai para as duas IAs inclui o que eu escrevi a mao, portanto
+ * a IA continua de onde eu deixei em vez de repetir o que ja foi dito.
+ */
+export function resumeWithAi(chatId: number): boolean {
+  const historico = getRecentMessages(chatId, 10);
+  const ultima = historico[historico.length - 1];
+
+  // So faz sentido responder se a ultima palavra foi do lead. Se fui eu a
+  // falar por ultimo, a bola esta do lado dele e o bot cala-se.
+  if (!ultima || ultima.role !== 'user') return false;
+
+  log.info(`chat ${chatId}: IA retomada, a responder a ultima mensagem do lead`);
+
+  // storeIncoming=false: a mensagem dele ja esta gravada, e grava-la outra vez
+  // punha-a duas vezes na conversa.
+  dispatchFunnelTurn(contextoParaChat(chatId), chatId, ultima.content, {
+    storeIncoming: false,
+  });
+
+  return true;
+}
+
+/**
+ * Manda o link do grupo VIP a quem eu acabei de aprovar.
+ *
+ * O deposito e validado por mim, fora do que o bot ve, e ate aqui o lead ficava
+ * a espera sem saber de nada. E o unico sitio onde o link do grupo sai.
+ */
+export async function sendVipWelcome(lead: Lead): Promise<boolean> {
+  if (!env.VIP_GROUP_LINK) {
+    log.error(`sem VIP_GROUP_LINK: o chat ${lead.chatId} foi aprovado mas nao recebeu o link`);
+    return false;
+  }
+
+  const nome = lead.firstName?.trim() || 'mano';
+  const bolhas = [
+    `Boas ${nome}, está tudo validado do meu lado. Bem-vindo ao VIP!`,
+    `Entra por aqui: ${env.VIP_GROUP_LINK}`,
+    'Deixa as notificações do grupo ligadas, que as entradas saem ao longo do dia e ' +
+      'a ideia é não perderes nenhuma. Qualquer dúvida, é só dizeres por aqui.',
+  ];
+
+  try {
+    for (const bolha of bolhas) {
+      await bot.api.sendMessage(lead.chatId, bolha, {
+        link_preview_options: { is_disabled: true },
+      });
+      addMessage({ chatId: lead.chatId, role: 'assistant', content: bolha, author: 'sistema' });
+    }
+
+    log.info(`link do VIP entregue ao chat ${lead.chatId}`);
+    return true;
+  } catch (error) {
+    log.error(`falha ao entregar o link do VIP ao chat ${lead.chatId}`, error);
+    return false;
+  }
+}
+
 /**
  * Avisa-me de que uma conversa passou para as minhas maos.
  *

@@ -1007,6 +1007,53 @@ export function setCanton(chatId: number, canton: string): void {
 }
 
 /**
+ * Repoe leads perdidos quando a base de dados foi apagada.
+ *
+ * Idempotente por construcao: um lead que ja exista nao e tocado, e a marca de
+ * historico so entra em conversas vazias. Correr isto dez vezes da o mesmo
+ * resultado que correr uma.
+ *
+ * O estagio so anda para a frente. Se o lead entretanto voltou a falar e ja
+ * esta mais adiantado do que o que vem nos logs, o que esta na base de dados
+ * ganha — os logs sao uma fotografia velha.
+ */
+export function restoreLeads(
+  leads: Array<{ chatId: number; stage: FunnelStage; firstName?: string | null }>,
+): { criados: number; existentes: number } {
+  let criados = 0;
+  let existentes = 0;
+
+  for (const lead of leads) {
+    const existing = getLead(lead.chatId);
+
+    if (existing) {
+      existentes += 1;
+    } else {
+      criados += 1;
+      upsertLead({ chatId: lead.chatId, firstName: lead.firstName ?? null });
+    }
+
+    // advanceStage e nao setStage: nunca puxa um lead para tras.
+    advanceStage(lead.chatId, lead.stage);
+
+    if (getRecentMessages(lead.chatId, 1).length === 0) {
+      addMessage({
+        chatId: lead.chatId,
+        role: 'user',
+        content:
+          '[conversa recuperada: este lead ja falou contigo antes, mas o texto das mensagens ' +
+          'perdeu-se. NAO te apresentes outra vez, NAO repitas a abertura e NAO recomeces o ' +
+          'funil. Retoma como quem continua uma conversa: pergunta como ele esta e puxa pelo ' +
+          'passo que falta no estagio em que ele esta]',
+        author: 'sistema',
+      });
+    }
+  }
+
+  return { criados, existentes };
+}
+
+/**
  * Repoe os leads aprovados listados no VIP_CHAT_IDS.
  *
  * Enquanto a base de dados viver dentro da pasta da aplicacao, cada deploy
@@ -1104,6 +1151,20 @@ export function getStats(): FunnelStats {
     pendingProofs: proofs?.total ?? 0,
     pendingPromises: promises?.total ?? 0,
   };
+}
+
+/**
+ * Forca o WAL para dentro do ficheiro principal.
+ *
+ * O backup copia o .sqlite sozinho; sem isto as ultimas escritas ficavam no
+ * -wal e o backup saia incompleto sem dar erro nenhum.
+ */
+export function checkpointDatabase(): void {
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  } catch (error) {
+    log.warn('falha no checkpoint do WAL antes do backup', error);
+  }
 }
 
 export function closeDatabase(): void {

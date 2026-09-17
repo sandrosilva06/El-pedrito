@@ -93,6 +93,8 @@ export const ADMIN_HTML = String.raw`<!doctype html>
   }
   .etiqueta.mao { background: var(--manual); color: #e8c86a; }
   .etiqueta.bloqueado { background: #3a1a1c; color: #e88; }
+  .etiqueta.vip { background: #123524; color: #6fe0a0; }
+  .etiqueta.afixado { background: #2b2540; color: #b9a6ff; }
 
   /* --- conversa --- */
   .mensagens { flex: 1; overflow-y: auto; padding: 12px; display: flex;
@@ -182,6 +184,8 @@ export const ADMIN_HTML = String.raw`<!doctype html>
       <div id="lead-nome"></div>
       <div class="sub" id="lead-info"></div>
     </div>
+    <button class="icone" id="alternar-afixar" title="Afixar no topo">☆</button>
+    <button class="botao discreto" id="alternar-vip">Aprovar</button>
     <button class="botao discreto" id="alternar-mao">Assumir</button>
   </div>
   <div id="aviso-mao" class="aviso mao" hidden>Estás a levar esta conversa. O bot não responde.</div>
@@ -289,6 +293,8 @@ async function carregarLista() {
   $('conversas').innerHTML = leads.map((l) => {
     const nome = l.firstName || ('#' + l.chatId);
     const etiquetas =
+      (l.pinned ? '<span class="etiqueta afixado">★ afixado</span>' : '') +
+      (l.stage === 'acesso_liberado' ? '<span class="etiqueta vip">VIP</span>' : '') +
       (l.humanHandover ? '<span class="etiqueta mao">à mão</span>' : '') +
       (l.blocked ? '<span class="etiqueta bloqueado">bloqueou</span>' : '') +
       '<span class="etiqueta">' + l.stage + '</span>';
@@ -348,6 +354,9 @@ async function actualizarConversa(irAoFundo) {
 
   $('aviso-mao').hidden = !lead.humanHandover;
   $('alternar-mao').textContent = lead.humanHandover ? 'Devolver ao bot' : 'Assumir';
+  $('alternar-afixar').textContent = lead.pinned ? '★' : '☆';
+  $('alternar-afixar').title = lead.pinned ? 'Desafixar' : 'Afixar no topo';
+  $('alternar-vip').textContent = lead.stage === 'acesso_liberado' ? 'Aprovado ✓' : 'Aprovar';
 
   const html = messages.map((m) => {
     if (m.content.startsWith('[')) {
@@ -401,6 +410,24 @@ $('voltar').addEventListener('click', () => {
   chatAberto = null;
   clearInterval(temporizador);
   mostrar('lista');
+  carregarLista();
+});
+
+$('alternar-afixar').addEventListener('click', async () => {
+  await api('/leads/' + chatAberto + '/pin', {
+    method: 'POST', body: JSON.stringify({ pinned: !leadAberto?.pinned }),
+  });
+  await actualizarConversa(false);
+});
+
+// "Aprovar" e dizer que validei o deposito a mao: o lead passa a estar no
+// grupo, sai das campanhas de venda e entra no acompanhamento VIP.
+$('alternar-vip').addEventListener('click', async () => {
+  const aprovado = leadAberto?.stage !== 'acesso_liberado';
+  await api('/leads/' + chatAberto + '/aprovar', {
+    method: 'POST', body: JSON.stringify({ aprovado }),
+  });
+  await actualizarConversa(false);
   carregarLista();
 });
 

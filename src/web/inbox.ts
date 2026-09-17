@@ -11,6 +11,9 @@ import {
   listInboxLeads,
   markBlocked,
   setHumanHandover,
+  setPinned,
+  setStage,
+  type FunnelStage,
 } from '../db/database';
 import { bot, invalidateChat } from '../telegram/bot';
 import { createLogger } from '../utils/logger';
@@ -457,6 +460,43 @@ export function createInboxRouter(): Router {
 
     log.info(`chat ${chatId}: controlo manual ${enabled ? 'ligado' : 'desligado'}`);
     res.json({ ok: true, humanHandover: enabled });
+  });
+
+  /** Afixar no topo da lista. Nao mexe no funil: e so para nao se perder. */
+  router.post('/leads/:chatId/pin', (req, res) => {
+    const chatId = parseChatId(req.params.chatId);
+    if (chatId === null) {
+      res.status(400).json({ error: 'chat_id invalido' });
+      return;
+    }
+
+    const pinned = Boolean((req.body as { pinned?: unknown })?.pinned);
+
+    setPinned(chatId, pinned);
+    log.info(`chat ${chatId}: ${pinned ? 'afixado' : 'desafixado'}`);
+    res.json({ ok: true, pinned });
+  });
+
+  /**
+   * "Ja aprovei este" — o deposito foi validado a mao, fora do que o bot ve.
+   *
+   * Poe o lead em acesso_liberado, que e o estagio de quem ja esta no grupo.
+   * A partir daqui ele sai das campanhas de venda e entra no acompanhamento
+   * VIP: mensagens de vez em quando a perguntar como esta a correr.
+   */
+  router.post('/leads/:chatId/aprovar', (req, res) => {
+    const chatId = parseChatId(req.params.chatId);
+    if (chatId === null) {
+      res.status(400).json({ error: 'chat_id invalido' });
+      return;
+    }
+
+    const aprovado = (req.body as { aprovado?: unknown })?.aprovado !== false;
+    const stage: FunnelStage = aprovado ? 'acesso_liberado' : 'comprovativo_recebido';
+
+    setStage(chatId, stage);
+    log.info(`chat ${chatId}: marcado como ${stage} a mao`);
+    res.json({ ok: true, stage });
   });
 
   // --- O outro bot ---------------------------------------------------------

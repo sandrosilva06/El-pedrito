@@ -64,9 +64,9 @@ const FALLBACK_SCRIPTS: Record<RemarketingAudience, string[]> = {
     '{nome}, tudo bem? Só para saber se a página abriu. Se precisares, faço o registo contigo passo a passo.',
   ],
   vip: [
-    'Boas companheiro! Ja foste dar uma olhadela as entradas que mandei hoje no VIP? Nao deixes passar os greens!',
-    '{nome}, mandei as entradas do dia no grupo. Da la um salto antes que os jogos comecem.',
-    'Tudo bem {nome}? Passa pelo VIP para veres o que ja saiu hoje, nao quero que percas nenhuma.',
+    'Boas {nome}! Como e que te esta a correr ai dentro? Tens conseguido entrar em todas as que mandamos?',
+    '{nome}, tudo bem? Diz-me la como te tem corrido. E importante nao saltares nenhuma entrada, e no conjunto que a coisa bate certo.',
+    'Tudo fixe {nome}? Ja mandamos as de hoje. Da la um salto e entra em todas, que saltar uma e onde a malta se estraga.',
   ],
   promessa: [
     'Boas malandro, ja saiste do trabalho? As apostas da noite saem daqui a bocado no VIP, estas pronto para abrires a conta e entrares?',
@@ -82,9 +82,14 @@ recusar, travou em alguma coisa: ou a pagina nao abriu, ou perdeu-se no
 registo. A mensagem pergunta o que aconteceu e oferece ajuda concreta, passo a
 passo. PROIBIDO falar de deposito, de valores ou de urgencia: o que falta saber
 e onde ele parou. Uma pergunta so, facil de responder.`,
-  vip: `Estes leads ja estao no grupo VIP. A mensagem deve puxa-los de volta ao
-grupo para verem as entradas do dia. Tom de companheirismo, nada de vendas —
-estas pessoas ja compraram.`,
+  vip: `Estes leads ja estao no grupo VIP e foram aprovados por mim. A mensagem
+faz duas coisas, nesta ordem: PERGUNTA como lhes esta a correr la dentro, e
+lembra que e para seguir TODAS as entradas, sem saltar nenhuma, porque o
+resultado vem do conjunto e nao de uma aposta escolhida a dedo. Tom de
+companheiro que acompanha, nada de vendas — estas pessoas ja compraram. Uma
+pergunta so, facil de responder. PROIBIDO prometer lucro, inventar numeros de
+acerto ou dizer que nao se perde nenhuma: o que se pede e que ele siga o
+metodo, nao que ele confie num resultado.`,
   promessa: `Este lead disse que tratava do assunto a esta hora e tu ficaste de
 lhe apitar. A mensagem e o cumprimento desse combinado, nao uma cobranca:
 lembra que ficou combinado, pergunta se ele ja tem um bocadinho, e refere que

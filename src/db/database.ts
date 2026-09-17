@@ -66,6 +66,13 @@ export interface Lead {
   /** Cantao onde vive, assim que o disser. Null enquanto nao se souber. */
   canton: string | null;
   /**
+   * Afixado no topo da caixa de entrada.
+   *
+   * Nao muda nada no funil: e so para o lead que importa nao se perder de
+   * vista entre as conversas novas que vao chegando todos os dias.
+   */
+  pinned: boolean;
+  /**
    * Em que trabalha, nas palavras dele. Null enquanto nao se souber.
    *
    * Ao contrario do cantao e da experiencia, nao ha detector em codigo: uma
@@ -162,6 +169,7 @@ interface LeadRow {
   promised_at: string | null;
   promise_note: string | null;
   canton: string | null;
+  pinned: number;
   job: string | null;
   betting_experience: string | null;
   first_name: string | null;
@@ -287,6 +295,9 @@ addColumnIfMissing('messages', 'media_kind', 'TEXT');
 // Em que o lead trabalha. Substitui o cantao como pergunta de qualificacao: o
 // trabalho diz mais sobre o tempo e o dinheiro dele, e da muito mais que falar.
 addColumnIfMissing('leads', 'job', 'TEXT');
+// Lead afixado no topo da caixa de entrada. Quem ja depositou nao pode ficar
+// perdido no meio de dezenas de conversas novas.
+addColumnIfMissing('leads', 'pinned', 'INTEGER NOT NULL DEFAULT 0');
 
 /**
  * Updates do Telegram ja processados.
@@ -363,6 +374,7 @@ function mapLead(row: LeadRow): Lead {
     promisedAt: row.promised_at,
     promiseNote: row.promise_note,
     canton: row.canton,
+    pinned: row.pinned === 1,
     job: row.job,
     bettingExperience: row.betting_experience,
     firstName: row.first_name,
@@ -445,7 +457,8 @@ const statements = {
      -- O created_at do SQLite so tem precisao ao segundo, portanto duas
      -- conversas activas no mesmo segundo empatam. O id da mensagem e
      -- estritamente crescente e desempata sempre pela mais recente.
-     ORDER BY coalesce(last_at, l.updated_at) DESC, coalesce(last_id, 0) DESC
+     -- Afixados primeiro, e so depois a ordem normal por actividade.
+     ORDER BY l.pinned DESC, coalesce(last_at, l.updated_at) DESC, coalesce(last_id, 0) DESC
      LIMIT ? OFFSET ?
   `),
   countInboxLeads: db.prepare(`
@@ -522,6 +535,8 @@ const statements = {
     UPDATE leads SET canton = ?, updated_at = datetime('now')
      WHERE chat_id = ? AND (canton IS NULL OR canton = '')
   `),
+  setPinned: db.prepare('UPDATE leads SET pinned = ? WHERE chat_id = ?'),
+  setStage: db.prepare("UPDATE leads SET stage = ?, updated_at = datetime('now') WHERE chat_id = ?"),
   setJob: db.prepare(`
     UPDATE leads SET job = ?, updated_at = datetime('now')
      WHERE chat_id = ? AND (job IS NULL OR job = '')
@@ -989,6 +1004,27 @@ export function pruneProcessedUpdates(keep = 5000): void {
 
 export function setCanton(chatId: number, canton: string): void {
   statements.setCanton.run(canton, chatId);
+}
+
+/**
+ * Afixa ou desafixa o lead no topo da caixa de entrada.
+ *
+ * E so ordenacao: nao mexe no estagio, no remarketing nem no que o bot diz.
+ */
+export function setPinned(chatId: number, pinned: boolean): void {
+  statements.setPinned.run(pinned ? 1 : 0, chatId);
+}
+
+/**
+ * Poe o lead num estagio a mao.
+ *
+ * O advanceStage nunca anda para tras, de proposito: impede que o modelo
+ * regrida um lead adiantado por ler mal uma mensagem. Mas quando sou eu a
+ * dizer que o lead ja tem o acesso, o estagio tem de obedecer — o pagamento
+ * foi validado por mim, fora do que o bot ve.
+ */
+export function setStage(chatId: number, stage: FunnelStage): void {
+  statements.setStage.run(stage, chatId);
 }
 
 /** A primeira resposta e a boa: escritas seguintes sao ignoradas no SQL. */

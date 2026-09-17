@@ -1,10 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { DatabaseSync } from 'node:sqlite';
-
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
+import { openDriver, type Driver } from './driver';
 
 const log = createLogger('db');
 
@@ -207,134 +206,219 @@ function ensureDirectory(file: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
 }
 
-ensureDirectory(env.databaseFile);
+/**
+ * A ligacao activa. Fica preenchida pelo initDatabase(), que corre no arranque
+ * antes de qualquer outra coisa tocar na base de dados.
+ *
+ * Nao e criada aqui em cima de proposito: abrir uma ligacao de rede no momento
+ * em que o modulo e importado obrigava tudo o que o importa a saber esperar, e
+ * nem sempre ha por quem esperar (um script, um teste, o /health).
+ */
+let driver: Driver | null = null;
 
-export const db = new DatabaseSync(env.databaseFile);
-
-// node:sqlite nao expoe .pragma(); os PRAGMAs vao por exec().
-// WAL nao se aplica a bancos em memoria, entao so e ligado em arquivo.
-if (env.databaseFile !== ':memory:') {
-  db.exec('PRAGMA journal_mode = WAL');
+/** Acesso interno, com erro claro se alguem se esquecer de inicializar. */
+function conn(): Driver {
+  if (!driver) {
+    throw new Error(
+      'base de dados nao inicializada: chama initDatabase() antes de a usar.',
+    );
+  }
+  return driver;
 }
 
-db.exec('PRAGMA foreign_keys = ON');
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS leads (
-    chat_id       INTEGER PRIMARY KEY,
-    first_name    TEXT,
-    username      TEXT,
-    language_code TEXT,
-    stage         TEXT NOT NULL DEFAULT 'novo',
-    notes         TEXT,
-    message_count INTEGER NOT NULL DEFAULT 0,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS messages (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id    INTEGER NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
-    role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-    content    TEXT NOT NULL,
-    directive  TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS deposit_proofs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id     INTEGER NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
-    lead_name   TEXT,
-    username    TEXT,
-    file_id     TEXT NOT NULL,
-    message_id  INTEGER,
-    status      TEXT NOT NULL DEFAULT 'pendente'
-                CHECK (status IN ('pendente', 'aprovado', 'recusado')),
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_proofs_status ON deposit_proofs (status, id DESC);
-  CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages (chat_id, id DESC);
-  CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads (stage);
-`);
-
-/**
- * O SQLite nao tem ADD COLUMN IF NOT EXISTS, e um deploy sobre uma base ja
- * existente teria de a apagar para ganhar colunas novas — com o historico dos
- * leads dentro. Daí a migracao a mao.
- */
-function addColumnIfMissing(table: string, column: string, definition: string): void {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (columns.some((entry) => entry.name === column)) return;
-
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  log.info(`migracao: ${table}.${column} adicionada`);
+/** Em que motor estamos, para quem precise de decidir (o backup, por exemplo). */
+export function databaseDialect(): 'sqlite' | 'postgres' {
+  return conn().dialect;
 }
 
-addColumnIfMissing('leads', 'last_remarketing_at', 'TEXT');
-addColumnIfMissing('leads', 'remarketing_touches', 'INTEGER NOT NULL DEFAULT 0');
-addColumnIfMissing('leads', 'blocked', 'INTEGER NOT NULL DEFAULT 0');
-// Estado "promessa de deposito": instante UTC combinado com o lead.
-addColumnIfMissing('leads', 'promised_at', 'TEXT');
-addColumnIfMissing('leads', 'promise_note', 'TEXT');
-// Cantao onde o lead vive. Primeira classe, e nao dentro das notas, porque a
-// regra de nao voltar a perguntar precisa de o consultar deterministicamente.
-addColumnIfMissing('leads', 'canton', 'TEXT');
-// Lead que respondeu a um toque de remarketing: sai da campanha de vez. Sem
-// isto o filtro por `updated_at` so adiava, e passada a janela a pessoa que ja
-// tinha respondido voltava a entrar na lista.
-addColumnIfMissing('leads', 'remarketing_cancelled', 'INTEGER NOT NULL DEFAULT 0');
-addColumnIfMissing('leads', 'betting_experience', 'TEXT');
-// O operador assumiu a conversa pela caixa de entrada: a IA cala-se.
-addColumnIfMissing('leads', 'human_handover', 'INTEGER NOT NULL DEFAULT 0');
-// Quem compos a mensagem. Ver MessageAuthor.
-addColumnIfMissing('messages', 'author', "TEXT NOT NULL DEFAULT 'bot'");
-// Media anexada a mensagem. Guarda-se o file_id do Telegram e nao os bytes: e
-// o Telegram que aloja o ficheiro, e o id chega para o voltar a pedir ou a
-// reenviar. O deposit_proofs continua a ser a tabela de validacao; isto e para
-// a conversa poder mostrar o que foi trocado.
-addColumnIfMissing('messages', 'media_file_id', 'TEXT');
-addColumnIfMissing('messages', 'media_kind', 'TEXT');
-// Em que o lead trabalha. Substitui o cantao como pergunta de qualificacao: o
-// trabalho diz mais sobre o tempo e o dinheiro dele, e da muito mais que falar.
-addColumnIfMissing('leads', 'job', 'TEXT');
-// Lead afixado no topo da caixa de entrada. Quem ja depositou nao pode ficar
-// perdido no meio de dezenas de conversas novas.
-addColumnIfMissing('leads', 'pinned', 'INTEGER NOT NULL DEFAULT 0');
-// Apelido, quando o Telegram o da. So o first_name e garantido.
-addColumnIfMissing('leads', 'last_name', 'TEXT');
+/**
+ * Esquema, por dialecto.
+ *
+ * Os chat_id do Telegram passam dos 2^31 (ha ids como 8962954467), portanto no
+ * Postgres tem de ser BIGINT. Com INTEGER a insercao rebentava em producao com
+ * leads novos e ninguem perceberia porque.
+ *
+ * As datas ficam como TEXTO "YYYY-MM-DD HH:MM:SS" em UTC nos dois motores, que
+ * e o formato que o SQLite ja usava. Assim todo o codigo que le, compara e
+ * ordena datas continua igual.
+ */
+const DDL: Record<'sqlite' | 'postgres', string[]> = {
+  sqlite: [
+    `CREATE TABLE IF NOT EXISTS leads (
+      chat_id       INTEGER PRIMARY KEY,
+      first_name    TEXT,
+      username      TEXT,
+      language_code TEXT,
+      stage         TEXT NOT NULL DEFAULT 'novo',
+      notes         TEXT,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS messages (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id    INTEGER NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
+      role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content    TEXT NOT NULL,
+      directive  TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS deposit_proofs (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id     INTEGER NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
+      lead_name   TEXT,
+      username    TEXT,
+      file_id     TEXT NOT NULL,
+      message_id  INTEGER,
+      status      TEXT NOT NULL DEFAULT 'pendente'
+                  CHECK (status IN ('pendente', 'aprovado', 'recusado')),
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS processed_updates (
+      update_id  INTEGER PRIMARY KEY,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS remarketing_runs (
+      slot       TEXT NOT NULL,
+      run_date   TEXT NOT NULL,
+      audience   TEXT NOT NULL,
+      sent       INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (slot, run_date, audience)
+    )`,
+  ],
+  postgres: [
+    `CREATE TABLE IF NOT EXISTS leads (
+      chat_id       BIGINT PRIMARY KEY,
+      first_name    TEXT,
+      username      TEXT,
+      language_code TEXT,
+      stage         TEXT NOT NULL DEFAULT 'novo',
+      notes         TEXT,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      created_at    TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+      updated_at    TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+    )`,
+    `CREATE TABLE IF NOT EXISTS messages (
+      id         BIGSERIAL PRIMARY KEY,
+      chat_id    BIGINT NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
+      role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content    TEXT NOT NULL,
+      directive  TEXT,
+      created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+    )`,
+    `CREATE TABLE IF NOT EXISTS deposit_proofs (
+      id          BIGSERIAL PRIMARY KEY,
+      chat_id     BIGINT NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
+      lead_name   TEXT,
+      username    TEXT,
+      file_id     TEXT NOT NULL,
+      message_id  BIGINT,
+      status      TEXT NOT NULL DEFAULT 'pendente'
+                  CHECK (status IN ('pendente', 'aprovado', 'recusado')),
+      created_at  TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+    )`,
+    `CREATE TABLE IF NOT EXISTS processed_updates (
+      update_id  BIGINT PRIMARY KEY,
+      created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+    )`,
+    `CREATE TABLE IF NOT EXISTS remarketing_runs (
+      slot       TEXT NOT NULL,
+      run_date   TEXT NOT NULL,
+      audience   TEXT NOT NULL,
+      sent       INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+      PRIMARY KEY (slot, run_date, audience)
+    )`,
+  ],
+};
+
+const INDICES = [
+  'CREATE INDEX IF NOT EXISTS idx_proofs_status ON deposit_proofs (status, id DESC)',
+  'CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages (chat_id, id DESC)',
+  'CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads (stage)',
+];
 
 /**
- * Updates do Telegram ja processados.
+ * Colunas acrescentadas depois da primeira versao.
  *
- * Quando o servico demora a responder — no Render acontece sempre que acorda
- * de hibernacao — o Telegram nao recebe o 200 a tempo e REENVIA o mesmo
- * update. Sem esta marca, o mesmo /start era processado duas vezes e o lead
- * recebia a conversa a dobrar, ou a saudacao seguida da resposta de quem
- * volta.
- *
- * Fica em disco e nao em memoria de proposito: o reenvio acontece justamente
- * a volta de um reinicio, que e quando a memoria se perde.
+ * O SQLite nao tem ADD COLUMN IF NOT EXISTS e obriga a perguntar primeiro; o
+ * Postgres tem, e resolve-se numa linha. A lista e a mesma para os dois, para
+ * nao haver duas verdades sobre o que a tabela tem.
  */
-db.exec(`
-  CREATE TABLE IF NOT EXISTS processed_updates (
-    update_id INTEGER PRIMARY KEY,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`);
+const COLUNAS: Array<{ tabela: string; coluna: string; sqlite: string; postgres: string }> = [
+  { tabela: 'leads', coluna: 'last_remarketing_at', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'remarketing_touches', sqlite: 'INTEGER NOT NULL DEFAULT 0', postgres: 'INTEGER NOT NULL DEFAULT 0' },
+  { tabela: 'leads', coluna: 'blocked', sqlite: 'INTEGER NOT NULL DEFAULT 0', postgres: 'INTEGER NOT NULL DEFAULT 0' },
+  { tabela: 'leads', coluna: 'promised_at', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'promise_note', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'canton', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'remarketing_cancelled', sqlite: 'INTEGER NOT NULL DEFAULT 0', postgres: 'INTEGER NOT NULL DEFAULT 0' },
+  { tabela: 'leads', coluna: 'betting_experience', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'human_handover', sqlite: 'INTEGER NOT NULL DEFAULT 0', postgres: 'INTEGER NOT NULL DEFAULT 0' },
+  { tabela: 'leads', coluna: 'job', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'pinned', sqlite: 'INTEGER NOT NULL DEFAULT 0', postgres: 'INTEGER NOT NULL DEFAULT 0' },
+  { tabela: 'leads', coluna: 'last_name', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'messages', coluna: 'author', sqlite: "TEXT NOT NULL DEFAULT 'bot'", postgres: "TEXT NOT NULL DEFAULT 'bot'" },
+  { tabela: 'messages', coluna: 'media_file_id', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'messages', coluna: 'media_kind', sqlite: 'TEXT', postgres: 'TEXT' },
+];
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS remarketing_runs (
-    slot       TEXT NOT NULL,
-    run_date   TEXT NOT NULL,
-    audience   TEXT NOT NULL,
-    sent       INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (slot, run_date, audience)
+async function addColumnIfMissing(
+  tabela: string,
+  coluna: string,
+  definicao: string,
+): Promise<void> {
+  const d = conn();
+
+  if (d.dialect === 'postgres') {
+    await d.exec(`ALTER TABLE ${tabela} ADD COLUMN IF NOT EXISTS ${coluna} ${definicao}`);
+    return;
+  }
+
+  const columns = await d.all<{ name: string }>(`PRAGMA table_info(${tabela})`);
+  if (columns.some((entry) => entry.name === coluna)) return;
+
+  await d.exec(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${definicao}`);
+  log.info(`migracao: ${tabela}.${coluna} adicionada`);
+}
+
+/**
+ * Abre a base de dados e poe o esquema em dia.
+ *
+ * Tem de ser chamada uma vez, no arranque, antes de qualquer leitura ou
+ * escrita. E idempotente: correr duas vezes nao faz mal nenhum.
+ */
+export async function initDatabase(): Promise<void> {
+  if (driver) return;
+
+  ensureDirectory(env.databaseFile);
+
+  driver = await openDriver({
+    databaseUrl: env.DATABASE_URL ?? null,
+    sqliteFile: env.databaseFile,
+  });
+
+  const dialecto = driver.dialect;
+
+  for (const tabela of DDL[dialecto]) {
+    await driver.exec(tabela);
+  }
+
+  for (const { tabela, coluna, sqlite, postgres } of COLUNAS) {
+    await addColumnIfMissing(tabela, coluna, dialecto === 'postgres' ? postgres : sqlite);
+  }
+
+  for (const indice of INDICES) {
+    await driver.exec(indice);
+  }
+
+  log.info(
+    dialecto === 'postgres'
+      ? 'Postgres pronto'
+      : `SQLite pronto em ${env.databaseFile}`,
   );
-`);
-
-log.info(`SQLite pronto em ${env.databaseFile}`);
+}
 
 /**
  * O node:sqlite nao tem o helper `transaction()` do better-sqlite3, entao a
@@ -414,8 +498,8 @@ function mapMessage(row: MessageRow): StoredMessage {
   };
 }
 
-const statements = {
-  upsertLead: db.prepare(`
+const SQL = {
+  upsertLead: `
     INSERT INTO leads (chat_id, first_name, username, language_code)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(chat_id) DO UPDATE SET
@@ -423,24 +507,24 @@ const statements = {
       username      = COALESCE(excluded.username, leads.username),
       language_code = COALESCE(excluded.language_code, leads.language_code),
       updated_at    = datetime('now')
-  `),
-  getLead: db.prepare('SELECT * FROM leads WHERE chat_id = ?'),
-  updateStage: db.prepare(`
+  `,
+  getLead: 'SELECT * FROM leads WHERE chat_id = ?',
+  updateStage: `
     UPDATE leads SET stage = ?, updated_at = datetime('now') WHERE chat_id = ?
-  `),
-  updateNotes: db.prepare(`
+  `,
+  updateNotes: `
     UPDATE leads SET notes = ?, updated_at = datetime('now') WHERE chat_id = ?
-  `),
-  bumpMessageCount: db.prepare(`
+  `,
+  bumpMessageCount: `
     UPDATE leads
        SET message_count = message_count + 1,
            updated_at    = datetime('now')
      WHERE chat_id = ?
-  `),
-  insertMessage: db.prepare(`
+  `,
+  insertMessage: `
     INSERT INTO messages (chat_id, role, author, content, media_file_id, media_kind, directive)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `),
+  `,
   /**
    * Lista para a caixa de entrada: o lead, a ultima mensagem e quando foi.
    *
@@ -451,7 +535,7 @@ const statements = {
    * O filtro de texto e sempre passado; quando vem vazio, o LIKE '%%' deixa
    * passar tudo, o que evita ter duas variantes da mesma query.
    */
-  inboxLeads: db.prepare(`
+  inboxLeads: `
     SELECT l.*,
            -- A pre-visualizacao ignora as marcas de sistema: sao instrucoes
            -- internas para a IA e nao mensagens trocadas com o lead. Apareciam
@@ -469,61 +553,59 @@ const statements = {
      -- Afixados primeiro, e so depois a ordem normal por actividade.
      ORDER BY l.pinned DESC, coalesce(last_at, l.updated_at) DESC, coalesce(last_id, 0) DESC
      LIMIT ? OFFSET ?
-  `),
-  countInboxLeads: db.prepare(`
+  `,
+  countInboxLeads: `
     SELECT COUNT(*) AS total
       FROM leads l
      WHERE (? = '' OR lower(coalesce(l.first_name, '') || ' ' || coalesce(l.username, '')) LIKE '%' || ? || '%')
        AND (? = '' OR l.stage = ?)
-  `),
+  `,
   /**
    * Historico completo, paginado para tras a partir de um id.
    *
    * O getRecentMessages so devolve a janela de memoria das IAs (tecto de 100);
    * aqui quer-se a conversa toda, que pode ser bem maior.
    */
-  messagesPage: db.prepare(`
+  messagesPage: `
     SELECT * FROM (
       SELECT * FROM messages
        WHERE chat_id = ? AND (? = 0 OR id < ?)
        ORDER BY id DESC LIMIT ?
     ) ORDER BY id ASC
-  `),
-  setHandover: db.prepare(`
+  `,
+  setHandover: `
     UPDATE leads SET human_handover = ?, updated_at = datetime('now') WHERE chat_id = ?
-  `),
-  recentMessages: db.prepare(`
+  `,
+  recentMessages: `
     SELECT * FROM (
       SELECT * FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?
     ) ORDER BY id ASC
-  `),
-  deleteMessages: db.prepare('DELETE FROM messages WHERE chat_id = ?'),
-  deleteLead: db.prepare('DELETE FROM leads WHERE chat_id = ?'),
-  countLeads: db.prepare('SELECT COUNT(*) AS total FROM leads'),
-  countMessages: db.prepare('SELECT COUNT(*) AS total FROM messages'),
-  countByStage: db.prepare('SELECT stage, COUNT(*) AS total FROM leads GROUP BY stage'),
-  insertProof: db.prepare(`
+  `,
+  deleteMessages: 'DELETE FROM messages WHERE chat_id = ?',
+  deleteLead: 'DELETE FROM leads WHERE chat_id = ?',
+  countLeads: 'SELECT COUNT(*) AS total FROM leads',
+  countMessages: 'SELECT COUNT(*) AS total FROM messages',
+  countByStage: 'SELECT stage, COUNT(*) AS total FROM leads GROUP BY stage',
+  insertProof: `
     INSERT INTO deposit_proofs (chat_id, lead_name, username, file_id, message_id)
     VALUES (?, ?, ?, ?, ?)
-  `),
-  countPendingProofs: db.prepare(
-    "SELECT COUNT(*) AS total FROM deposit_proofs WHERE status = 'pendente'",
-  ),
-  deleteProofs: db.prepare('DELETE FROM deposit_proofs WHERE chat_id = ?'),
-  claimSlot: db.prepare(`
+  `,
+  countPendingProofs: "SELECT COUNT(*) AS total FROM deposit_proofs WHERE status = 'pendente'",
+  deleteProofs: 'DELETE FROM deposit_proofs WHERE chat_id = ?',
+  claimSlot: `
     INSERT OR IGNORE INTO remarketing_runs (slot, run_date, audience) VALUES (?, ?, ?)
-  `),
-  recordSlotSent: db.prepare(`
+  `,
+  recordSlotSent: `
     UPDATE remarketing_runs SET sent = ? WHERE slot = ? AND run_date = ? AND audience = ?
-  `),
-  markRemarketed: db.prepare(`
+  `,
+  markRemarketed: `
     UPDATE leads
        SET last_remarketing_at = datetime('now'),
            remarketing_touches = remarketing_touches + 1
      WHERE chat_id = ?
-  `),
-  markBlocked: db.prepare("UPDATE leads SET blocked = 1 WHERE chat_id = ?"),
-  cancelRemarketing: db.prepare(`
+  `,
+  markBlocked: "UPDATE leads SET blocked = 1 WHERE chat_id = ?",
+  cancelRemarketing: `
     UPDATE leads
        SET remarketing_cancelled = 1
      WHERE chat_id = ?
@@ -532,50 +614,48 @@ const statements = {
        -- depois arrefecer.
        AND last_remarketing_at IS NOT NULL
        AND remarketing_cancelled = 0
-  `),
-  claimUpdate: db.prepare('INSERT OR IGNORE INTO processed_updates (update_id) VALUES (?)'),
-  pruneUpdates: db.prepare(`
+  `,
+  claimUpdate: 'INSERT OR IGNORE INTO processed_updates (update_id) VALUES (?)',
+  pruneUpdates: `
     DELETE FROM processed_updates
      WHERE update_id NOT IN (
        SELECT update_id FROM processed_updates ORDER BY update_id DESC LIMIT ?
      )
-  `),
-  setCanton: db.prepare(`
+  `,
+  setCanton: `
     UPDATE leads SET canton = ?, updated_at = datetime('now')
      WHERE chat_id = ? AND (canton IS NULL OR canton = '')
-  `),
-  setPinned: db.prepare('UPDATE leads SET pinned = ? WHERE chat_id = ?'),
-  setIdentity: db.prepare(`
+  `,
+  setPinned: 'UPDATE leads SET pinned = ? WHERE chat_id = ?',
+  setIdentity: `
     UPDATE leads
        SET first_name = coalesce(?, first_name),
            last_name = coalesce(?, last_name),
            username = coalesce(?, username)
      WHERE chat_id = ?
-  `),
-  leadsWithoutName: db.prepare(`
+  `,
+  leadsWithoutName: `
     SELECT chat_id FROM leads
      WHERE (first_name IS NULL OR first_name = '')
        AND blocked = 0
      ORDER BY updated_at DESC
      LIMIT ?
-  `),
-  setStage: db.prepare("UPDATE leads SET stage = ?, updated_at = datetime('now') WHERE chat_id = ?"),
-  setJob: db.prepare(`
+  `,
+  setStage: "UPDATE leads SET stage = ?, updated_at = datetime('now') WHERE chat_id = ?",
+  setJob: `
     UPDATE leads SET job = ?, updated_at = datetime('now')
      WHERE chat_id = ? AND (job IS NULL OR job = '')
-  `),
-  setBettingExperience: db.prepare(`
+  `,
+  setBettingExperience: `
     UPDATE leads SET betting_experience = ?, updated_at = datetime('now')
      WHERE chat_id = ? AND (betting_experience IS NULL OR betting_experience = '')
-  `),
-  setPromise: db.prepare(`
+  `,
+  setPromise: `
     UPDATE leads SET promised_at = ?, promise_note = ?, updated_at = datetime('now')
      WHERE chat_id = ?
-  `),
-  clearPromise: db.prepare(
-    'UPDATE leads SET promised_at = NULL, promise_note = NULL WHERE chat_id = ?',
-  ),
-  duePromises: db.prepare(`
+  `,
+  clearPromise: 'UPDATE leads SET promised_at = NULL, promise_note = NULL WHERE chat_id = ?',
+  duePromises: `
     SELECT * FROM leads
      WHERE blocked = 0
        AND promised_at IS NOT NULL
@@ -583,10 +663,8 @@ const statements = {
        AND stage NOT IN ('perdido', ${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
      ORDER BY promised_at ASC
      LIMIT ?
-  `),
-  countPromises: db.prepare(
-    'SELECT COUNT(*) AS total FROM leads WHERE promised_at IS NOT NULL',
-  ),
+  `,
+  countPromises: 'SELECT COUNT(*) AS total FROM leads WHERE promised_at IS NOT NULL',
   /**
    * Lead que recebeu o link e ficou calado.
    *
@@ -594,7 +672,7 @@ const statements = {
    * ja tem a pagina, e travou em alguma coisa. Esperar as 24h do toque normal e
    * chegar tarde. Por isso tem lista propria, com janela propria.
    */
-  targetsLinkParado: db.prepare(`
+  targetsLinkParado: `
     SELECT * FROM leads
      WHERE blocked = 0
        AND remarketing_cancelled = 0
@@ -607,8 +685,8 @@ const statements = {
        AND updated_at <= datetime('now', ?)
      ORDER BY updated_at ASC
      LIMIT ?
-  `),
-  targetsNotConverted: db.prepare(`
+  `,
+  targetsNotConverted: `
     SELECT * FROM leads
      WHERE blocked = 0
        -- Ja respondeu a um toque: a campanha acabou para ele.
@@ -626,8 +704,8 @@ const statements = {
        AND (last_remarketing_at IS NULL OR last_remarketing_at <= datetime('now', ?))
      ORDER BY updated_at ASC
      LIMIT ?
-  `),
-  targetsVip: db.prepare(`
+  `,
+  targetsVip: `
     SELECT * FROM leads
      WHERE blocked = 0
        -- Conversa levada a mao: nao entra em campanha nenhuma.
@@ -636,8 +714,8 @@ const statements = {
        AND (last_remarketing_at IS NULL OR last_remarketing_at <= datetime('now', ?))
      ORDER BY updated_at ASC
      LIMIT ?
-  `),
-  convertedDirectives: db.prepare(`
+  `,
+  convertedDirectives: `
     SELECT m.directive AS directive
       FROM messages m
       JOIN leads l ON l.chat_id = m.chat_id
@@ -647,7 +725,7 @@ const statements = {
        AND m.chat_id <> ?
      ORDER BY m.id DESC
      LIMIT ?
-  `),
+  `,
 };
 
 /**
@@ -667,7 +745,7 @@ export function getConversionPlaybook(params: {
 
   // Le mais do que precisa porque a deduplicacao por objecao descarta muitas.
   const rows = asRows<{ directive: string }>(
-    statements.convertedDirectives.all(...CONVERTED_STAGES, params.excludeChatId, limit * 8),
+    await driver.all(SQL.convertedDirectives, [...CONVERTED_STAGES, params.excludeChatId, limit * 8]),
   );
 
   const seen = new Set<string>();
@@ -717,13 +795,11 @@ export function recordDepositProof(input: {
   fileId: string;
   messageId: number | null;
 }): DepositProof {
-  const result = statements.insertProof.run(
-    input.chatId,
+  const result = await driver.run(SQL.insertProof, [input.chatId,
     input.leadName,
     input.username,
     input.fileId,
-    input.messageId,
-  );
+    input.messageId,]);
 
   return {
     id: Number(result.lastInsertRowid),
@@ -744,14 +820,12 @@ export function upsertLead(input: {
   username?: string | null;
   languageCode?: string | null;
 }): Lead {
-  statements.upsertLead.run(
-    input.chatId,
+  await driver.run(SQL.upsertLead, [input.chatId,
     input.firstName ?? null,
     input.username ?? null,
-    input.languageCode ?? null,
-  );
+    input.languageCode ?? null,]);
 
-  const row = asRow<LeadRow>(statements.getLead.get(input.chatId));
+  const row = asRow<LeadRow>(await driver.get(SQL.getLead, [input.chatId]));
 
   if (!row) {
     throw new Error(`Falha ao persistir o lead ${input.chatId}`);
@@ -761,7 +835,7 @@ export function upsertLead(input: {
 }
 
 export function getLead(chatId: number): Lead | null {
-  const row = asRow<LeadRow>(statements.getLead.get(chatId));
+  const row = asRow<LeadRow>(await driver.get(SQL.getLead, [chatId]));
   return row ? mapLead(row) : null;
 }
 
@@ -781,12 +855,12 @@ export function advanceStage(chatId: number, next: FunnelStage): FunnelStage {
     if (nextIndex < currentIndex) return current;
   }
 
-  statements.updateStage.run(next, chatId);
+  await driver.run(SQL.updateStage, [next, chatId]);
   return next;
 }
 
 export function setNotes(chatId: number, notes: string | null): void {
-  statements.updateNotes.run(notes, chatId);
+  await driver.run(SQL.updateNotes, [notes, chatId]);
 }
 
 export function addMessage(input: {
@@ -801,22 +875,20 @@ export function addMessage(input: {
   mediaKind?: string | null;
 }): void {
   inTransaction(() => {
-    statements.insertMessage.run(
-      input.chatId,
+    await driver.run(SQL.insertMessage, [input.chatId,
       input.role,
       input.author ?? 'bot',
       input.content,
       input.mediaFileId ?? null,
       input.mediaKind ?? (input.mediaFileId ? 'photo' : null),
-      input.directive ?? null,
-    );
-    statements.bumpMessageCount.run(input.chatId);
+      input.directive ?? null,]);
+    await driver.run(SQL.bumpMessageCount, [input.chatId]);
   });
 }
 
 /** Janela de memoria enviada as duas IAs, em ordem cronologica. */
 export function getRecentMessages(chatId: number, limit = env.HISTORY_WINDOW): StoredMessage[] {
-  const rows = asRows<MessageRow>(statements.recentMessages.all(chatId, limit));
+  const rows = asRows<MessageRow>(await driver.all(SQL.recentMessages, [chatId, limit]));
   return rows.map(mapMessage);
 }
 
@@ -850,10 +922,10 @@ export function listInboxLeads(params: {
   };
 
   const rows = asRows<Row>(
-    statements.inboxLeads.all(search, search, stage, stage, limit, offset),
+    await driver.all(SQL.inboxLeads, [search, search, stage, stage, limit, offset]),
   );
   const count = asRow<{ total: number }>(
-    statements.countInboxLeads.get(search, search, stage, stage),
+    await driver.get(SQL.countInboxLeads, [search, search, stage, stage]),
   );
 
   return {
@@ -879,7 +951,7 @@ export function getMessagesPage(
   const before = params.before ?? 0;
   const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 
-  return asRows<MessageRow>(statements.messagesPage.all(chatId, before, before, limit)).map(
+  return asRows<MessageRow>(await driver.all(SQL.messagesPage, [chatId, before, before, limit])).map(
     mapMessage,
   );
 }
@@ -891,20 +963,20 @@ export function getMessagesPage(
  * passa a ser do operador ate ele a devolver ao bot.
  */
 export function setHumanHandover(chatId: number, enabled: boolean): void {
-  statements.setHandover.run(enabled ? 1 : 0, chatId);
+  await driver.run(SQL.setHandover, [enabled ? 1 : 0, chatId]);
 }
 
 /** Apaga o historico do chat, mantendo o lead (usado pelo /reset). */
 export function clearHistory(chatId: number): void {
-  statements.deleteMessages.run(chatId);
+  await driver.run(SQL.deleteMessages, [chatId]);
 }
 
 /** Remove lead e historico — usado pelo /parar, para respeitar o opt-out. */
 export function forgetLead(chatId: number): void {
   inTransaction(() => {
-    statements.deleteProofs.run(chatId);
-    statements.deleteMessages.run(chatId);
-    statements.deleteLead.run(chatId);
+    await driver.run(SQL.deleteProofs, [chatId]);
+    await driver.run(SQL.deleteMessages, [chatId]);
+    await driver.run(SQL.deleteLead, [chatId]);
   });
 }
 
@@ -918,7 +990,7 @@ export function claimRemarketingSlot(
   runDate: string,
   audience: RemarketingAudience,
 ): boolean {
-  return statements.claimSlot.run(slot, runDate, audience).changes > 0;
+  return await driver.run(SQL.claimSlot, [slot, runDate, audience]).changes > 0;
 }
 
 export function recordRemarketingSent(
@@ -927,7 +999,7 @@ export function recordRemarketingSent(
   audience: RemarketingAudience,
   sent: number,
 ): void {
-  statements.recordSlotSent.run(sent, slot, runDate, audience);
+  await driver.run(SQL.recordSlotSent, [sent, slot, runDate, audience]);
 }
 
 /**
@@ -954,11 +1026,11 @@ export function getRemarketingTargets(params: {
 
   const rows =
     params.audience === 'link_parado'
-      ? asRows<LeadRow>(statements.targetsLinkParado.all(cold, params.limit))
+      ? asRows<LeadRow>(await driver.all(SQL.targetsLinkParado, [cold, params.limit]))
       : params.audience === 'vip'
-      ? asRows<LeadRow>(statements.targetsVip.all(sinceLast, params.limit))
+      ? asRows<LeadRow>(await driver.all(SQL.targetsVip, [sinceLast, params.limit]))
       : asRows<LeadRow>(
-          statements.targetsNotConverted.all(params.touch ?? 0, cold, sinceLast, params.limit),
+          await driver.all(SQL.targetsNotConverted, [params.touch ?? 0, cold, sinceLast, params.limit]),
         );
 
   return rows.map(mapLead);
@@ -972,16 +1044,16 @@ export function getRemarketingTargets(params: {
  * faz a pessoa bloquear o bot.
  */
 export function cancelRemarketing(chatId: number): void {
-  statements.cancelRemarketing.run(chatId);
+  await driver.run(SQL.cancelRemarketing, [chatId]);
 }
 
 export function markRemarketed(chatId: number): void {
-  statements.markRemarketed.run(chatId);
+  await driver.run(SQL.markRemarketed, [chatId]);
 }
 
 /** O lead bloqueou o bot: nunca mais lhe mandamos nada. */
 export function markBlocked(chatId: number): void {
-  statements.markBlocked.run(chatId);
+  await driver.run(SQL.markBlocked, [chatId]);
 }
 
 /**
@@ -989,11 +1061,11 @@ export function markBlocked(chatId: number): void {
  * promessa nova substitui a anterior: vale a ultima coisa que ele disse.
  */
 export function setDepositPromise(chatId: number, whenUtc: string, note: string | null): void {
-  statements.setPromise.run(whenUtc, note, chatId);
+  await driver.run(SQL.setPromise, [whenUtc, note, chatId]);
 }
 
 export function clearDepositPromise(chatId: number): void {
-  statements.clearPromise.run(chatId);
+  await driver.run(SQL.clearPromise, [chatId]);
 }
 
 /**
@@ -1001,7 +1073,7 @@ export function clearDepositPromise(chatId: number): void {
  * lembrete e para quem disse que ia tratar disto e ainda nao tratou.
  */
 export function getDuePromises(nowUtc: string, limit: number): Lead[] {
-  return asRows<LeadRow>(statements.duePromises.all(nowUtc, limit)).map(mapLead);
+  return asRows<LeadRow>(await driver.all(SQL.duePromises, [nowUtc, limit])).map(mapLead);
 }
 
 /**
@@ -1016,17 +1088,17 @@ export function getDuePromises(nowUtc: string, limit: number): Lead[] {
  * fresta entre os dois por onde passa o reenvio que chega ao mesmo tempo.
  */
 export function claimUpdate(updateId: number): boolean {
-  const result = statements.claimUpdate.run(updateId);
+  const result = await driver.run(SQL.claimUpdate, [updateId]);
   return result.changes > 0;
 }
 
 /** Guarda so os ultimos updates: a tabela existe para dedup, nao para historia. */
 export function pruneProcessedUpdates(keep = 5000): void {
-  statements.pruneUpdates.run(keep);
+  await driver.run(SQL.pruneUpdates, [keep]);
 }
 
 export function setCanton(chatId: number, canton: string): void {
-  statements.setCanton.run(canton, chatId);
+  await driver.run(SQL.setCanton, [canton, chatId]);
 }
 
 /**
@@ -1130,7 +1202,7 @@ export function restoreVipLeads(
  * E so ordenacao: nao mexe no estagio, no remarketing nem no que o bot diz.
  */
 export function setPinned(chatId: number, pinned: boolean): void {
-  statements.setPinned.run(pinned ? 1 : 0, chatId);
+  await driver.run(SQL.setPinned, [pinned ? 1 : 0, chatId]);
 }
 
 /**
@@ -1142,7 +1214,7 @@ export function setPinned(chatId: number, pinned: boolean): void {
  * foi validado por mim, fora do que o bot ve.
  */
 export function setStage(chatId: number, stage: FunnelStage): void {
-  statements.setStage.run(stage, chatId);
+  await driver.run(SQL.setStage, [stage, chatId]);
 }
 
 /**
@@ -1156,38 +1228,36 @@ export function setIdentity(
   chatId: number,
   identity: { firstName: string | null; lastName: string | null; username: string | null },
 ): void {
-  statements.setIdentity.run(
-    identity.firstName,
+  await driver.run(SQL.setIdentity, [identity.firstName,
     identity.lastName,
     identity.username,
-    chatId,
-  );
+    chatId,]);
 }
 
 /** Leads sem nome nenhum: sao estes que aparecem como "#id" na caixa. */
 export function leadsSemNome(limit = 200): number[] {
   const rows = asRows<{ chat_id: number }>(
-    statements.leadsWithoutName.all(Math.max(1, Math.min(limit, 1000))),
+    await driver.all(SQL.leadsWithoutName, [Math.max(1, Math.min(limit, 1000))]),
   );
   return rows.map((row) => row.chat_id);
 }
 
 /** A primeira resposta e a boa: escritas seguintes sao ignoradas no SQL. */
 export function setJob(chatId: number, job: string): void {
-  statements.setJob.run(job, chatId);
+  await driver.run(SQL.setJob, [job, chatId]);
 }
 
 /** A primeira resposta e a boa: escritas seguintes sao ignoradas no SQL. */
 export function setBettingExperience(chatId: number, experience: string): void {
-  statements.setBettingExperience.run(experience, chatId);
+  await driver.run(SQL.setBettingExperience, [experience, chatId]);
 }
 
 export function getStats(): FunnelStats {
-  const leads = asRow<{ total: number }>(statements.countLeads.get());
-  const messages = asRow<{ total: number }>(statements.countMessages.get());
-  const stages = asRows<{ stage: string; total: number }>(statements.countByStage.all());
-  const proofs = asRow<{ total: number }>(statements.countPendingProofs.get());
-  const promises = asRow<{ total: number }>(statements.countPromises.get());
+  const leads = asRow<{ total: number }>(await driver.get(SQL.countLeads, []));
+  const messages = asRow<{ total: number }>(await driver.get(SQL.countMessages, []));
+  const stages = asRows<{ stage: string; total: number }>(await driver.all(SQL.countByStage, []));
+  const proofs = asRow<{ total: number }>(await driver.get(SQL.countPendingProofs, []));
+  const promises = asRow<{ total: number }>(await driver.get(SQL.countPromises, []));
 
   const byStage: Record<string, number> = {};
   for (const row of stages) {

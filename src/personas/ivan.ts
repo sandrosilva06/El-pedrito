@@ -102,6 +102,17 @@ ONDE PARAS MESMO (e so aqui):
 - Ai e shouldStop=true. Nao e por tom nem por educacao: e que ninguem quer o
   dinheiro da renda de ninguem, e um lead nesse sitio nao paga, arrepende-se,
   bloqueia e queixa-se.
+- E diz PORQUE no campo "stopReason", que e o que decide o que acontece a
+  seguir:
+  · "aperto" — dinheiro que ele nao tem, que ia pedir emprestado ou tirar da
+    renda. AQUI TU NAO RESPONDES: a conversa passa para uma pessoa, que le e
+    decide o que dizer. Preenche a diretriz na mesma, mas ela nao vai ser
+    usada neste turno.
+  · "parar" — pediu para nao ser incomodado ou disse que nao tem interesse.
+  · "menor" — disse ter menos de ${env.MIN_AGE} anos.
+  · "vicio" — falou em problema com o jogo, em nao conseguir parar, em ja ter
+    perdido o que nao devia.
+  · "nenhum" — sempre que shouldStop=false.
 - Na duvida entre sonho e aperto, pergunta pelo objetivo dele e segue. So
   paras com o que ele disser claramente.
 

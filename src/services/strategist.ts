@@ -29,6 +29,19 @@ export const LEAD_PROFILES = [
 
 export type LeadProfile = (typeof LEAD_PROFILES)[number];
 
+/**
+ * Porque e que a venda para.
+ *
+ * - "aperto": ele disse que nao tem dinheiro para isto, que ia pedir
+ *   emprestado ou tirar do que e preciso para as contas. A IA cala-se e a
+ *   conversa passa para uma pessoa, que decide o que dizer.
+ * - "parar": pediu para nao ser incomodado. Encerra-se e fica assim.
+ * - "menor" / "vicio": nao ha venda nem conversa a mao. Encerra-se.
+ */
+export const STOP_REASONS = ['nenhum', 'aperto', 'parar', 'menor', 'vicio'] as const;
+
+export type StopReason = (typeof STOP_REASONS)[number];
+
 export interface SalesDirective {
   /** O que o lead quer neste momento, em uma frase. */
   intent: string;
@@ -68,6 +81,11 @@ export interface SalesDirective {
   notes: string;
   /** Se true, o lead pediu para parar / nao tem perfil: encerrar com respeito. */
   shouldStop: boolean;
+  /**
+   * Porque e que se para. Decide o que acontece a seguir: "aperto" passa a
+   * conversa para uma pessoa, os outros encerram-na.
+   */
+  stopReason: StopReason;
 }
 
 const responseSchema: Schema = {
@@ -104,6 +122,15 @@ const responseSchema: Schema = {
     includeLink: { type: Type.BOOLEAN, description: 'Incluir o link de afiliado?' },
     notes: { type: Type.STRING, description: 'Fatos a memorizar sobre o lead' },
     shouldStop: { type: Type.BOOLEAN, description: 'O lead pediu para parar?' },
+    stopReason: {
+      type: Type.STRING,
+      enum: [...STOP_REASONS],
+      description:
+        'Se shouldStop=true, PORQUE: "aperto" (disse que nao tem dinheiro ' +
+        'para isto, que ia pedir emprestado ou tirar do dinheiro das contas), ' +
+        '"parar" (pediu para nao ser incomodado), "menor", "vicio". ' +
+        '"nenhum" quando shouldStop=false.',
+    },
   },
   required: [
     'intent',
@@ -120,6 +147,7 @@ const responseSchema: Schema = {
     'includeLink',
     'notes',
     'shouldStop',
+    'stopReason',
   ],
 };
 
@@ -196,6 +224,7 @@ function fallbackDirective(lead: Lead): SalesDirective {
     includeLink: false,
     notes: '',
     shouldStop: false,
+    stopReason: 'nenhum',
   };
 }
 
@@ -313,6 +342,9 @@ async function requestDirective(params: {
       includeLink: parsed.includeLink === true,
       notes: text(parsed.notes, ''),
       shouldStop: parsed.shouldStop === true,
+      stopReason: STOP_REASONS.includes(parsed.stopReason as StopReason)
+        ? (parsed.stopReason as StopReason)
+        : 'nenhum',
     };
 
     log.debug(`diretriz gerada em ${Date.now() - startedAt}ms`, {

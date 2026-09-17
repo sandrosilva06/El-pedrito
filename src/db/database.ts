@@ -505,6 +505,9 @@ const statements = {
   targetsNotConverted: db.prepare(`
     SELECT * FROM leads
      WHERE blocked = 0
+       -- Conversa levada a mao: quem manda nela e uma pessoa, e um guiao
+       -- automatico por cima do que ela escreveu denuncia o bot.
+       AND human_handover = 0
        AND stage NOT IN ('perdido', ${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
        AND remarketing_touches < ?
        -- Quem prometeu ja tem lembrete proprio marcado; dois no mesmo dia
@@ -518,6 +521,8 @@ const statements = {
   targetsVip: db.prepare(`
     SELECT * FROM leads
      WHERE blocked = 0
+       -- Conversa levada a mao: nao entra em campanha nenhuma.
+       AND human_handover = 0
        AND stage IN (${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
        AND (last_remarketing_at IS NULL OR last_remarketing_at <= datetime('now', ?))
      ORDER BY updated_at ASC

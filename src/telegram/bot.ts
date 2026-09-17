@@ -11,6 +11,7 @@ import {
   getStats,
   recordDepositProof,
   setCanton,
+  setHumanHandover,
   setDepositPromise,
   setNotes,
   upsertLead,
@@ -435,6 +436,23 @@ async function runFunnelTurn(
         addMessage({ chatId, role: 'user', content: incoming });
       }
 
+      // O lead disse que nao tem dinheiro para isto, ou que ia pedir
+      // emprestado. O Ivan nao responde a isto de todo: a conversa passa para
+      // uma pessoa, que le o que ele escreveu e decide o que dizer.
+      //
+      // A resposta que o redator ja escreveu e deitada fora de proposito —
+      // seria o encerramento automatico, e quem manda aqui e quem vai
+      // responder a mao. O estagio tambem nao mexe: isto nao e um lead
+      // perdido, e um lead a espera de uma pessoa.
+      if (directive.shouldStop && directive.stopReason === 'aperto') {
+        setHumanHandover(chatId, true);
+        stopTyping();
+
+        log.info(`conversa entregue a mao chat=${chatId}: o lead falou em nao ter dinheiro`);
+        await notifyHandover(current, incoming);
+        return;
+      }
+
       addMessage({
         chatId,
         role: 'assistant',
@@ -649,6 +667,40 @@ function buildCaption(media: ForwardedMedia): string {
  * Copia a midia para o canal de controlo. Sem isto o registo ficaria so na
  * base de dados e o lead esperaria por alguem que nao sabe que ele existe.
  */
+/**
+ * Avisa-me de que uma conversa passou para as minhas maos.
+ *
+ * Vai para o mesmo destino das imagens (o canal de controlo, ou os admins
+ * quando nao ha canal): e onde eu ja olho. Sem isto a entrega era silenciosa e
+ * o lead ficava a espera de uma resposta que so aparecia se eu abrisse a app
+ * por acaso.
+ */
+async function notifyHandover(lead: Lead, incoming: string): Promise<void> {
+  if (mediaLogChatIds.length === 0) {
+    log.error(
+      `conversa do chat ${lead.chatId} entregue a mao, mas nao ha destino para avisar: ` +
+        've a caixa de entrada',
+    );
+    return;
+  }
+
+  const text =
+    'Conversa entregue a ti — o lead falou em dinheiro que nao tem\n\n' +
+    `Nome: ${lead.firstName || '(sem nome)'}\n` +
+    `Username: ${lead.username ? `@${lead.username}` : '(sem username)'}\n` +
+    `ID: ${lead.chatId}\n\n` +
+    `Ultima mensagem dele:\n"${incoming.slice(0, 500)}"\n\n` +
+    'O bot esta calado nesta conversa. Responde-lhe pela caixa de entrada.';
+
+  for (const destination of mediaLogChatIds) {
+    try {
+      await bot.api.sendMessage(destination, text, { link_preview_options: { is_disabled: true } });
+    } catch (error) {
+      log.error(`falha ao avisar ${destination} da entrega do chat ${lead.chatId}`, error);
+    }
+  }
+}
+
 async function forwardMedia(media: ForwardedMedia): Promise<void> {
   if (mediaLogChatIds.length === 0) {
     log.error(

@@ -684,12 +684,16 @@ O QUE FAZES AGORA:
  * bloco do playbook e a parte que muda a cada conversao e a que mais custa
  * verificar so por observacao das respostas.
  */
-export function buildPrompt(params: {
+export async function buildPrompt(params: {
   lead: Lead;
   history: StoredMessage[];
   incoming: string;
-}): string {
+}): Promise<string> {
   const { lead, history, incoming } = params;
+
+  // Lido antes de montar o texto: o playbook vem da base de dados, e um
+  // template string nao espera por uma promessa.
+  const playbook = await getConversionPlaybook({ excludeChatId: lead.chatId });
 
   return `CONTEXTO DO LEAD
 - chat_id: ${lead.chatId}
@@ -707,7 +711,7 @@ ${returningBlock(incoming)}
 
 HISTORICO RECENTE
 ${renderHistory(history)}
-${renderPlaybook(getConversionPlaybook({ excludeChatId: lead.chatId }))}
+${renderPlaybook(playbook)}
 NOVA MENSAGEM DO LEAD
 ${incoming}
 
@@ -728,7 +732,7 @@ export async function planStrategy(params: {
 }): Promise<SalesDirective> {
   const { lead, history, incoming } = params;
 
-  const prompt = buildPrompt(params);
+  const prompt = await buildPrompt(params);
 
   const startedAt = Date.now();
 

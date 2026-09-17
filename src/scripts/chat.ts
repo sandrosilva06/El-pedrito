@@ -34,8 +34,8 @@ async function main(): Promise<void> {
   const { env } = await import('../config/env');
 
   async function turn(incoming: string): Promise<void> {
-    const history = db.getRecentMessages(CHAT_ID);
-    const lead = db.upsertLead({ chatId: CHAT_ID, firstName: NAME });
+    const history = await db.getRecentMessages(CHAT_ID);
+    const lead = await db.upsertLead({ chatId: CHAT_ID, firstName: NAME });
 
     const t0 = Date.now();
     const directive = await planStrategy({ lead, history, incoming });
@@ -43,7 +43,7 @@ async function main(): Promise<void> {
     const answer = await writeReply({ lead, history, incoming, directive });
     const t2 = Date.now();
 
-    db.addMessage({ chatId: CHAT_ID, role: 'user', content: incoming });
+    await db.addMessage({ chatId: CHAT_ID, role: 'user', content: incoming });
     db.addMessage({
       chatId: CHAT_ID,
       role: 'assistant',
@@ -57,13 +57,13 @@ async function main(): Promise<void> {
     // partida quando o que faltava era o teste passar por aqui.
     if (!lead.canton) {
       const detected = detectCanton(incoming) ?? detectCanton(directive.canton);
-      if (detected) db.setCanton(CHAT_ID, detected);
+      if (detected) await db.setCanton(CHAT_ID, detected);
     }
 
     console.log(dim(`\n  ┌─ DIRETRIZ (estrategista, ${t1 - t0}ms)`));
     console.log(dim(`  │ estagio    ${directive.stage}   temp ${directive.temperature}/100`));
     console.log(dim(`  │ perfil     ${directive.profile}`));
-    console.log(dim(`  │ cantao     ${db.getLead(CHAT_ID)?.canton ?? '(desconhecido)'}`));
+    console.log(dim(`  │ cantao     ${(await db.getLead(CHAT_ID))?.canton ?? '(desconhecido)'}`));
     console.log(dim(`  │ intencao   ${directive.intent}`));
     console.log(dim(`  │ objecao    ${directive.objection}`));
     console.log(dim(`  │ instrucao  ${directive.directive}`));

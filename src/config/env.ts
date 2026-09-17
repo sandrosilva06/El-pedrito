@@ -231,6 +231,18 @@ const schema = z
      * o acesso e uma decisao minha, tomada depois de validar o deposito.
      */
     VIP_GROUP_LINK: optionalString.transform((value) => value ?? 'https://t.me/+aTgtTQdqcThjNTk0'),
+    /**
+     * Ligacao ao Postgres. Definida, e o Postgres que guarda tudo: leads,
+     * conversas, comprovativos, estado do remarketing. Vazia, fica o SQLite.
+     *
+     * E o interruptor da migracao inteira, e tambem a forma de voltar atras:
+     * apagar a variavel devolve o servico ao comportamento anterior sem mexer
+     * numa linha de codigo.
+     *
+     * Formato normal, o mesmo que o Supabase, o Neon e o Render dao:
+     * postgresql://utilizador:palavra@servidor:5432/base
+     */
+    DATABASE_URL: optionalString,
 
     // --- Caixa de entrada -------------------------------------------------
     /**

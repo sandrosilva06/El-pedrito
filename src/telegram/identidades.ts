@@ -34,7 +34,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * recuse (bloqueou o bot, apagou a conta) e saltado, e os outros seguem.
  */
 export async function preencherNomes(api: Api, limite = 200): Promise<number> {
-  const pendentes = leadsSemNome(limite);
+  const pendentes = await leadsSemNome(limite);
   if (pendentes.length === 0) return 0;
 
   log.info(`${pendentes.length} lead(s) sem nome; a perguntar ao Telegram`);
@@ -55,7 +55,7 @@ export async function preencherNomes(api: Api, limite = 200): Promise<number> {
 
       if (!firstName && !username) continue;
 
-      setIdentity(chatId, { firstName, lastName, username });
+      await setIdentity(chatId, { firstName, lastName, username });
       preenchidos += 1;
     } catch (error) {
       // Bloqueou o bot, apagou a conta, ou o id ja nao existe. Nao ha nada a

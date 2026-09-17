@@ -273,11 +273,11 @@ export function createInboxRouter(): Router {
     res.json({ bots });
   });
 
-  router.get('/leads', (req, res) => {
+  router.get('/leads', async (req, res) => {
     const { search, stage, limit, offset } = req.query as Record<string, string | undefined>;
 
     res.json(
-      listInboxLeads({
+      await listInboxLeads({
         search,
         stage,
         limit: limit ? Number(limit) : undefined,
@@ -286,14 +286,14 @@ export function createInboxRouter(): Router {
     );
   });
 
-  router.get('/leads/:chatId', (req, res) => {
+  router.get('/leads/:chatId', async (req, res) => {
     const chatId = parseChatId(req.params.chatId);
     if (chatId === null) {
       res.status(400).json({ error: 'chat_id invalido' });
       return;
     }
 
-    const lead = getLead(chatId);
+    const lead = await getLead(chatId);
     if (!lead) {
       res.status(404).json({ error: 'lead nao encontrado' });
       return;
@@ -302,7 +302,7 @@ export function createInboxRouter(): Router {
     res.json({ lead });
   });
 
-  router.get('/leads/:chatId/messages', (req, res) => {
+  router.get('/leads/:chatId/messages', async (req, res) => {
     const chatId = parseChatId(req.params.chatId);
     if (chatId === null) {
       res.status(400).json({ error: 'chat_id invalido' });
@@ -312,7 +312,7 @@ export function createInboxRouter(): Router {
     const { before, limit } = req.query as Record<string, string | undefined>;
 
     res.json({
-      messages: getMessagesPage(chatId, {
+      messages: await getMessagesPage(chatId, {
         before: before ? Number(before) : undefined,
         limit: limit ? Number(limit) : undefined,
       }),
@@ -351,11 +351,11 @@ export function createInboxRouter(): Router {
         link_preview_options: { is_disabled: true },
       });
 
-      addMessage({ chatId, role: 'assistant', content: text, author: 'humano' });
+      await addMessage({ chatId, role: 'assistant', content: text, author: 'humano' });
 
       // Quem escreve a mao fica com a conversa. Sem isto a IA respondia a
       // seguir e contradizia o que o operador acabou de dizer.
-      setHumanHandover(chatId, true);
+      await setHumanHandover(chatId, true);
       invalidateChat(chatId);
 
       log.info(`resposta manual enviada ao chat ${chatId} (message_id ${sent.message_id})`);
@@ -364,7 +364,7 @@ export function createInboxRouter(): Router {
       const description = error instanceof GrammyError ? error.description : String(error);
 
       if (/bot was blocked|user is deactivated|chat not found/i.test(description)) {
-        markBlocked(chatId);
+        await markBlocked(chatId);
         log.info(`chat ${chatId} bloqueou o bot; marcado`);
         res.status(409).json({ error: 'este lead bloqueou o bot', blocked: true });
         return;
@@ -417,7 +417,7 @@ export function createInboxRouter(): Router {
         // que e o que vale a pena guardar para a conversa voltar a mostrar.
         const fileId = sent.photo?.[sent.photo.length - 1]?.file_id ?? null;
 
-        addMessage({
+        await addMessage({
           chatId,
           role: 'assistant',
           content: caption,
@@ -426,7 +426,7 @@ export function createInboxRouter(): Router {
           mediaKind: 'photo',
         });
 
-        setHumanHandover(chatId, true);
+        await setHumanHandover(chatId, true);
         invalidateChat(chatId);
 
         log.info(`imagem enviada a mao ao chat ${chatId} (${bytes.length} bytes)`);
@@ -435,7 +435,7 @@ export function createInboxRouter(): Router {
         const description = error instanceof GrammyError ? error.description : String(error);
 
         if (/bot was blocked|user is deactivated|chat not found/i.test(description)) {
-          markBlocked(chatId);
+          await markBlocked(chatId);
           log.info(`chat ${chatId} bloqueou o bot; marcado`);
           res.status(409).json({ error: 'este lead bloqueou o bot', blocked: true });
           return;
@@ -491,7 +491,7 @@ export function createInboxRouter(): Router {
     }
   });
 
-  router.post('/leads/:chatId/handover', (req, res) => {
+  router.post('/leads/:chatId/handover', async (req, res) => {
     const chatId = parseChatId(req.params.chatId);
     if (chatId === null) {
       res.status(400).json({ error: 'chat_id invalido' });
@@ -500,7 +500,7 @@ export function createInboxRouter(): Router {
 
     const enabled = Boolean((req.body as { enabled?: unknown })?.enabled);
 
-    setHumanHandover(chatId, enabled);
+    await setHumanHandover(chatId, enabled);
     // Corta qualquer turno em voo, para a IA nao falar depois de o operador
     // ter assumido a conversa.
     if (enabled) invalidateChat(chatId);
@@ -510,7 +510,7 @@ export function createInboxRouter(): Router {
     // Devolver ao bot nao pode ser so levantar o travao: se o lead ficou a
     // espera de resposta, ela tem de sair agora. O historico que a IA recebe
     // inclui o que eu escrevi a mao, portanto ela continua de onde eu deixei.
-    const respondeu = enabled ? false : resumeWithAi(chatId);
+    const respondeu = enabled ? false : await resumeWithAi(chatId);
 
     res.json({ ok: true, humanHandover: enabled, respondeu });
   });
@@ -539,7 +539,7 @@ export function createInboxRouter(): Router {
       return;
     }
 
-    const lead = getLead(chatId);
+    const lead = await getLead(chatId);
     if (!lead) {
       res.status(404).json({ error: 'lead desconhecido' });
       return;
@@ -555,7 +555,7 @@ export function createInboxRouter(): Router {
       // Gravada como 'sistema': nao foi a IA a compo-la nem fui eu a escreve-la,
       // saiu de um guiao. Continua a ser uma mensagem REAL enviada ao lead, por
       // isso aparece na conversa e na pre-visualizacao como qualquer outra.
-      addMessage({ chatId, role: 'assistant', content: texto, author: 'sistema' });
+      await addMessage({ chatId, role: 'assistant', content: texto, author: 'sistema' });
 
       log.info(`remarketing manual (${tipo}) enviado ao chat ${chatId}`);
       res.json({ ok: true, texto, messageId: sent.message_id });
@@ -563,7 +563,7 @@ export function createInboxRouter(): Router {
       const description = error instanceof GrammyError ? error.description : String(error);
 
       if (error instanceof GrammyError && /blocked|deactivated/i.test(description)) {
-        markBlocked(chatId);
+        await markBlocked(chatId);
       }
 
       log.error(`falha no remarketing manual ao chat ${chatId}`, error);
@@ -572,7 +572,7 @@ export function createInboxRouter(): Router {
   });
 
   /** Afixar no topo da lista. Nao mexe no funil: e so para nao se perder. */
-  router.post('/leads/:chatId/pin', (req, res) => {
+  router.post('/leads/:chatId/pin', async (req, res) => {
     const chatId = parseChatId(req.params.chatId);
     if (chatId === null) {
       res.status(400).json({ error: 'chat_id invalido' });
@@ -581,7 +581,7 @@ export function createInboxRouter(): Router {
 
     const pinned = Boolean((req.body as { pinned?: unknown })?.pinned);
 
-    setPinned(chatId, pinned);
+    await setPinned(chatId, pinned);
     log.info(`chat ${chatId}: ${pinned ? 'afixado' : 'desafixado'}`);
     res.json({ ok: true, pinned });
   });
@@ -593,7 +593,7 @@ export function createInboxRouter(): Router {
    * A partir daqui ele sai das campanhas de venda e entra no acompanhamento
    * VIP: mensagens de vez em quando a perguntar como esta a correr.
    */
-  router.post('/leads/:chatId/aprovar', (req, res) => {
+  router.post('/leads/:chatId/aprovar', async (req, res) => {
     const chatId = parseChatId(req.params.chatId);
     if (chatId === null) {
       res.status(400).json({ error: 'chat_id invalido' });
@@ -603,7 +603,7 @@ export function createInboxRouter(): Router {
     const aprovado = (req.body as { aprovado?: unknown })?.aprovado !== false;
     const stage: FunnelStage = aprovado ? 'acesso_liberado' : 'comprovativo_recebido';
 
-    setStage(chatId, stage);
+    await setStage(chatId, stage);
     log.info(`chat ${chatId}: marcado como ${stage} a mao`);
 
     if (!aprovado) {
@@ -614,9 +614,9 @@ export function createInboxRouter(): Router {
     // Aprovar devolve a conversa a IA: a partir daqui ela trata de duvidas de
     // acesso e do acompanhamento. A foto dele tinha-a passado para a minha
     // mao, e se isso ficasse ligado o lead nao voltava a ter resposta.
-    setHumanHandover(chatId, false);
+    await setHumanHandover(chatId, false);
 
-    const lead = getLead(chatId);
+    const lead = await getLead(chatId);
     if (!lead) {
       res.status(404).json({ error: 'lead desconhecido' });
       return;

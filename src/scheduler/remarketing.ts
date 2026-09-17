@@ -65,7 +65,7 @@ async function sendToAudience(
   // A reserva e por (slot, dia, publico) e vive na base de dados: o Render
   // reinicia o servico a toda a hora, e sem isto cada reinicio dentro da
   // janela reenviaria a campanha inteira.
-  if (!claimRemarketingSlot(slot, date, audience)) return;
+  if (!await claimRemarketingSlot(slot, date, audience)) return;
 
   // O VIP e o link_parado sao listas so; quem nao converteu corre toque a
   // toque, porque cada toque tem o seu texto e a sua janela de tempo.
@@ -79,7 +79,7 @@ async function sendToAudience(
   let considered = 0;
 
   for (const touch of touches) {
-    const targets = getRemarketingTargets({
+    const targets = await getRemarketingTargets({
       audience,
       touch,
       // Primeiro toque: conta desde a ultima coisa que o lead disse. Segundo:
@@ -124,7 +124,7 @@ async function sendToAudience(
     return;
   }
 
-  recordRemarketingSent(slot, date, audience, sent);
+  await recordRemarketingSent(slot, date, audience, sent);
   log.info(`slot ${slot} (${audience}): ${sent}/${considered} entregues`);
 }
 
@@ -140,8 +140,8 @@ async function sendOne(lead: Lead, template: string): Promise<boolean> {
     // mensagens que nao existiam em lado nenhum: a caixa de entrada mostrava
     // uma conversa diferente da real, e as IAs tambem nao sabiam o que ja lhe
     // tinha sido dito.
-    addMessage({ chatId: lead.chatId, role: 'assistant', content: text, author: 'sistema' });
-    markRemarketed(lead.chatId);
+    await addMessage({ chatId: lead.chatId, role: 'assistant', content: text, author: 'sistema' });
+    await markRemarketed(lead.chatId);
     return true;
   } catch (error) {
     const description = (error as { description?: string })?.description ?? '';
@@ -149,7 +149,7 @@ async function sendOne(lead: Lead, template: string): Promise<boolean> {
     // 403 significa que o lead bloqueou o bot ou apagou a conversa. Insistir
     // com quem bloqueou nao entrega nada e conta para os limites do Telegram.
     if (/bot was blocked|user is deactivated|chat not found/i.test(description)) {
-      markBlocked(lead.chatId);
+      await markBlocked(lead.chatId);
       log.info(`lead ${lead.chatId} bloqueou o bot; retirado da lista`);
       return false;
     }
@@ -169,7 +169,7 @@ async function sendOne(lead: Lead, template: string): Promise<boolean> {
  * incomodar quem nao pediu nada.
  */
 async function sendDuePromises(): Promise<void> {
-  const due = getDuePromises(new Date().toISOString(), 100);
+  const due = await getDuePromises(new Date().toISOString(), 100);
   if (due.length === 0) return;
 
   const { template, generated } = await generateRemarketingMessage('promessa');
@@ -178,7 +178,7 @@ async function sendDuePromises(): Promise<void> {
   for (const lead of due) {
     // Limpa antes de enviar: se o envio falhar, o lead nao fica a receber o
     // mesmo lembrete a cada minuto ate ao fim dos tempos.
-    clearDepositPromise(lead.chatId);
+    await clearDepositPromise(lead.chatId);
 
     const delivered = await sendOne(lead, template);
     log.info(

@@ -6,6 +6,7 @@ import { webhookCallback } from 'grammy';
 import { env, isProduction } from './config/env';
 import {
   closeDatabase,
+  initDatabase,
   getStats,
   pruneProcessedUpdates,
   restoreLeads,
@@ -75,7 +76,7 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.get('/stats', (req, res) => {
+app.get('/stats', async (req, res) => {
   // Endpoint interno: so responde com o segredo do webhook, para nao expor
   // metricas do funil publicamente.
   // Usa o segredo apenas quando ele foi configurado explicitamente: o valor
@@ -87,7 +88,7 @@ app.get('/stats', (req, res) => {
     return;
   }
 
-  res.json(getStats());
+  res.json(await getStats());
 });
 
 /**
@@ -159,10 +160,15 @@ async function start(): Promise<void> {
     log.info(`HTTP ouvindo na porta ${env.PORT}`);
   });
 
+  // A base de dados abre AQUI, e nao no momento em que o modulo e importado.
+  // Com o Postgres a ligacao e rede: tem de haver por quem esperar, e a porta
+  // ja esta a ouvir para o Render nao derrubar o servico enquanto isto demora.
+  await initDatabase();
+
   // A tabela de updates processados existe para nao repetir entregas, nao para
   // guardar historia. Podada no arranque e uma vez por hora.
-  pruneProcessedUpdates();
-  const prune = setInterval(() => pruneProcessedUpdates(), 60 * 60 * 1000);
+  await pruneProcessedUpdates();
+  const prune = setInterval(() => void pruneProcessedUpdates(), 60 * 60 * 1000);
   prune.unref();
 
   // Um disco efemero nao da erro nenhum: o bot funciona, atende, converte, e
@@ -183,7 +189,7 @@ async function start(): Promise<void> {
   // efemera: e idempotente, e assim o estagio e o afixado ficam garantidos em
   // qualquer arranque.
   if (env.vipLeads.length > 0) {
-    const repostos = restoreVipLeads(env.vipLeads);
+    const repostos = await restoreVipLeads(env.vipLeads);
     log.info(
       `VIP_CHAT_IDS: ${env.vipLeads.length} lead(s) aprovados e afixados` +
         `${repostos > 0 ? `, ${repostos} recriado(s) do zero` : ''}`,
@@ -194,7 +200,7 @@ async function start(): Promise<void> {
   // idempotente: passado o primeiro arranque, isto so confirma o que ja la
   // esta e nao mexe em nada.
   if (env.RECOVER_LEADS) {
-    const { criados, existentes } = restoreLeads(LEADS_RECUPERADOS);
+    const { criados, existentes } = await restoreLeads(LEADS_RECUPERADOS);
     if (criados > 0) {
       log.info(`recuperacao: ${criados} lead(s) repostos dos logs (${existentes} ja existiam)`);
     }
@@ -333,7 +339,7 @@ async function shutdown(signal: string): Promise<void> {
     if (backupTimer) clearInterval(backupTimer);
     if (env.BACKUP_ENABLED) await backupDatabase(bot.api);
 
-    closeDatabase();
+    await closeDatabase();
     log.info('encerrado com sucesso');
     process.exit(0);
   } catch (error) {

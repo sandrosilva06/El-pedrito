@@ -50,7 +50,7 @@ export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 bot.use(async (ctx, next) => {
   const updateId = ctx.update.update_id;
 
-  if (!claimUpdate(updateId)) {
+  if (!await claimUpdate(updateId)) {
     log.warn(`update ${updateId} repetido pelo Telegram, ignorado`);
     return;
   }
@@ -142,11 +142,11 @@ const rateCleanup = setInterval(
 
 rateCleanup.unref();
 
-function leadFromContext(ctx: Context): Lead | null {
+async function leadFromContext(ctx: Context): Promise<Lead | null> {
   const chatId = ctx.chat?.id;
   if (chatId === undefined) return null;
 
-  const lead = upsertLead({
+  const lead = await upsertLead({
     chatId,
     firstName: ctx.from?.first_name ?? null,
     username: ctx.from?.username ?? null,
@@ -157,7 +157,7 @@ function leadFromContext(ctx: Context): Lead | null {
   // ele. Fica aqui, e nao no handler de texto, porque uma foto ou um sticker
   // sao resposta na mesma: a pessoa voltou, e quem voltou passa a ter uma
   // conversa a serio em vez de guioes automaticos por cima.
-  cancelRemarketing(chatId);
+  await cancelRemarketing(chatId);
 
   return lead;
 }
@@ -270,10 +270,10 @@ function keepTyping(ctx: Context): () => void {
 // ---------------------------------------------------------------------------
 
 bot.command('start', async (ctx) => {
-  const lead = leadFromContext(ctx);
+  const lead = await leadFromContext(ctx);
   if (!lead) return;
 
-  const history = getRecentMessages(lead.chatId, 20);
+  const history = await getRecentMessages(lead.chatId, 20);
 
   /**
    * Tres situacoes diferentes, e nao duas.
@@ -342,7 +342,7 @@ bot.command('start', async (ctx) => {
 
   log.info(`/start de lead novo chat=${lead.chatId} — inicia a fase 1`);
 
-  advanceStage(lead.chatId, 'qualificacao');
+  await advanceStage(lead.chatId, 'qualificacao');
 
   const name = lead.firstName ? ` ${lead.firstName}` : '';
   const greeting =
@@ -350,17 +350,17 @@ bot.command('start', async (ctx) => {
     `Este grupo foi lançado para ${env.TARGET_AUDIENCE}. Diz-me só uma coisa: ` +
     'já costumas acompanhar apostas desportivas ou seria a primeira vez?';
 
-  addMessage({ chatId: lead.chatId, role: 'assistant', content: greeting });
+  await addMessage({ chatId: lead.chatId, role: 'assistant', content: greeting });
   dispatchMessage(ctx, lead.chatId, greeting);
 });
 
 bot.command('reset', async (ctx) => {
-  const lead = leadFromContext(ctx);
+  const lead = await leadFromContext(ctx);
   if (!lead) return;
 
   invalidateChat(lead.chatId);
-  clearHistory(lead.chatId);
-  setNotes(lead.chatId, null);
+  await clearHistory(lead.chatId);
+  await setNotes(lead.chatId, null);
   await ctx.reply('Pronto, limpei a nossa conversa. Diz-me o que queres saber.');
 });
 
@@ -371,7 +371,7 @@ bot.command('parar', async (ctx) => {
   // Antes de apagar: o que estiver em fila fica invalido e nao volta a gravar
   // nada nem a falar com quem pediu para parar.
   invalidateChat(chatId);
-  forgetLead(chatId);
+  await forgetLead(chatId);
   await ctx.reply(
     'Sem problema, não te volto a incomodar. Apaguei a nossa conversa. ' +
       'Se mudares de ideias, é só mandares /start.',
@@ -387,7 +387,7 @@ bot.command('stats', async (ctx) => {
     return;
   }
 
-  const stats = getStats();
+  const stats = await getStats();
   const stages = Object.entries(stats.byStage)
     .map(([stage, total]) => `  ${stage}: ${total}`)
     .join('\n');
@@ -412,12 +412,12 @@ bot.command('stats', async (ctx) => {
  *
  * A escrita e ignorada se o lead ja tiver cantao: a primeira resposta e a boa.
  */
-function recordCanton(
+async function recordCanton(
   chatId: number,
   known: string | null,
   incoming: string,
   directive: SalesDirective,
-): void {
+): Promise<void> {
   if (known) return;
 
   // A leitura em codigo tem prioridade: devolve o nome canonico do cantao,
@@ -425,7 +425,7 @@ function recordCanton(
   const detected = detectCanton(incoming) ?? detectCanton(directive.canton);
   if (!detected) return;
 
-  setCanton(chatId, detected);
+  await setCanton(chatId, detected);
   log.info(`cantao registado chat=${chatId} -> ${detected}`);
 }
 
@@ -440,13 +440,13 @@ function recordCanton(
  *
  * A escrita e ignorada se ja houver resposta: a primeira e a boa.
  */
-function recordJob(chatId: number, known: string | null, directive: SalesDirective): void {
+async function recordJob(chatId: number, known: string | null, directive: SalesDirective): Promise<void> {
   if (known) return;
 
   const job = directive.job.trim();
   if (job.length === 0) return;
 
-  setJob(chatId, job);
+  await setJob(chatId, job);
   log.info(`trabalho registado chat=${chatId} -> ${job}`);
 }
 
@@ -457,12 +457,12 @@ function recordJob(chatId: number, known: string | null, directive: SalesDirecti
  *
  * A escrita e ignorada se ja houver resposta: a primeira e a boa.
  */
-function recordExperience(
+async function recordExperience(
   chatId: number,
   known: string | null,
   incoming: string,
   directive: SalesDirective,
-): void {
+): Promise<void> {
   if (known) return;
 
   // A leitura em codigo tem prioridade sobre a do modelo, que tanto pode
@@ -471,7 +471,7 @@ function recordExperience(
     detectBettingExperience(incoming) ?? detectBettingExperience(directive.bettingExperience);
   if (!detected) return;
 
-  setBettingExperience(chatId, detected);
+  await setBettingExperience(chatId, detected);
   log.info(`experiencia registada chat=${chatId} -> ${detected}`);
 }
 
@@ -480,12 +480,12 @@ function recordExperience(
  * hora ja passada e do dia seguinte: quem diz "as 18h" as 19h esta a falar de
  * amanha, nao de ha uma hora.
  */
-function recordPromise(chatId: number, directive: SalesDirective): void {
+async function recordPromise(chatId: number, directive: SalesDirective): Promise<void> {
   if (!directive.promisedTime) return;
   if (directive.shouldStop) return;
 
   const when = nextOccurrenceUtc(directive.promisedTime, env.REMARKETING_TIMEZONE);
-  setDepositPromise(chatId, when, directive.promisedTime);
+  await setDepositPromise(chatId, when, directive.promisedTime);
   log.info(`promessa registada chat=${chatId} para ${directive.promisedTime} (UTC ${when})`);
 }
 
@@ -573,9 +573,9 @@ async function runFunnelTurn(
     //
     // Fica ANTES do keepTyping, senao o lead via o "a escrever..." de uma
     // resposta que nunca chega.
-    if (upsertLead({ chatId }).humanHandover) {
+    if ((await upsertLead({ chatId })).humanHandover) {
       if (options.storeIncoming) {
-        addMessage({ chatId, role: 'user', content: incoming });
+        await addMessage({ chatId, role: 'user', content: incoming });
       }
 
       log.info(`turno do chat ${chatId} nao respondido: a conversa esta a ser levada a mao`);
@@ -587,8 +587,8 @@ async function runFunnelTurn(
     try {
       // Historico lido ANTES de gravar a mensagem nova: as duas IAs recebem o
       // passado como contexto e a mensagem atual separadamente.
-      const history = getRecentMessages(chatId);
-      const current = upsertLead({ chatId });
+      const history = await getRecentMessages(chatId);
+      const current = await upsertLead({ chatId });
 
       const directive = await planStrategy({ lead: current, history, incoming });
       const answer = await writeReply({ lead: current, history, incoming, directive });
@@ -602,7 +602,7 @@ async function runFunnelTurn(
       }
 
       if (options.storeIncoming) {
-        addMessage({ chatId, role: 'user', content: incoming });
+        await addMessage({ chatId, role: 'user', content: incoming });
       }
 
       // O lead disse que nao tem dinheiro para isto, ou que ia pedir
@@ -616,7 +616,7 @@ async function runFunnelTurn(
       if (directive.shouldStop && directive.stopReason === 'aperto') {
         // A partir daqui o remarketing tambem nao lhe toca: as listas de
         // campanha excluem quem esta a ser levado a mao.
-        setHumanHandover(chatId, true);
+        await setHumanHandover(chatId, true);
         stopTyping();
 
         log.info(`conversa entregue a mao chat=${chatId}: o lead falou em nao ter dinheiro`);
@@ -624,14 +624,14 @@ async function runFunnelTurn(
         return;
       }
 
-      addMessage({
+      await addMessage({
         chatId,
         role: 'assistant',
         content: answer,
         directive: JSON.stringify(directive),
       });
 
-      advanceStage(chatId, directive.shouldStop ? 'perdido' : directive.stage);
+      await advanceStage(chatId, directive.shouldStop ? 'perdido' : directive.stage);
       recordPromise(chatId, directive);
       recordCanton(chatId, current.canton, incoming, directive);
       recordJob(chatId, current.job, directive);
@@ -641,7 +641,7 @@ async function runFunnelTurn(
         const merged = [current.notes, directive.notes.trim()]
           .filter((part): part is string => Boolean(part && part.length > 0))
           .join(' | ');
-        setNotes(chatId, merged.slice(-2000));
+        await setNotes(chatId, merged.slice(-2000));
       }
 
       stopTyping();
@@ -660,7 +660,7 @@ bot.on('message:text', async (ctx) => {
   // Comandos desconhecidos nao devem entrar na cadeia de IA.
   if (incomingRaw.startsWith('/')) return;
 
-  const lead = leadFromContext(ctx);
+  const lead = await leadFromContext(ctx);
   if (!lead || incomingRaw.length === 0) return;
 
   if (isRateLimited(lead.chatId)) {
@@ -690,7 +690,7 @@ bot.on('message:text', async (ctx) => {
  * tirava-o do remarketing.
  */
 bot.on([':photo', ':document'], async (ctx) => {
-  const lead = leadFromContext(ctx);
+  const lead = await leadFromContext(ctx);
   if (!lead) return;
 
   const message = ctx.message;
@@ -714,7 +714,7 @@ bot.on([':photo', ':document'], async (ctx) => {
     return;
   }
 
-  const proof = recordDepositProof({
+  const proof = await recordDepositProof({
     chatId: lead.chatId,
     leadName: lead.firstName,
     username: lead.username,
@@ -723,11 +723,11 @@ bot.on([':photo', ':document'], async (ctx) => {
   });
 
   // Ele mexeu-se: nao faz sentido apitar-lhe o lembrete de deposito a seguir.
-  clearDepositPromise(lead.chatId);
+  await clearDepositPromise(lead.chatId);
 
   // Fica no historico para o estrategista saber que a imagem chegou e que
   // ficou sem resposta. E ele que decide o que fazer quando o lead escrever.
-  addMessage({
+  await addMessage({
     chatId: lead.chatId,
     role: 'user',
     content: '[o lead enviou uma imagem; ninguem lhe respondeu e ainda nao se sabe o que ela mostra]',
@@ -743,7 +743,7 @@ bot.on([':photo', ':document'], async (ctx) => {
   // minha: valido o pagamento fora do que o bot ve. A IA fica calada nesta
   // conversa ate eu decidir, para nao confirmar acessos que nao dei nem
   // mandar o lead repetir um passo que ele ja fez.
-  setHumanHandover(lead.chatId, true);
+  await setHumanHandover(lead.chatId, true);
   invalidateChat(lead.chatId);
 
   // Nenhuma resposta ao lead, de proposito. Ver o comentario no topo.
@@ -789,8 +789,8 @@ function contextoParaChat(chatId: number): Context {
  * O historico que vai para as duas IAs inclui o que eu escrevi a mao, portanto
  * a IA continua de onde eu deixei em vez de repetir o que ja foi dito.
  */
-export function resumeWithAi(chatId: number): boolean {
-  const historico = getRecentMessages(chatId, 10);
+export async function resumeWithAi(chatId: number): Promise<boolean> {
+  const historico = await getRecentMessages(chatId, 10);
   const ultima = historico[historico.length - 1];
 
   // So faz sentido responder se a ultima palavra foi do lead. Se fui eu a
@@ -833,7 +833,7 @@ export async function sendVipWelcome(lead: Lead): Promise<boolean> {
       await bot.api.sendMessage(lead.chatId, bolha, {
         link_preview_options: { is_disabled: true },
       });
-      addMessage({ chatId: lead.chatId, role: 'assistant', content: bolha, author: 'sistema' });
+      await addMessage({ chatId: lead.chatId, role: 'assistant', content: bolha, author: 'sistema' });
     }
 
     log.info(`link do VIP entregue ao chat ${lead.chatId}`);
@@ -936,7 +936,7 @@ bot.on('message', async (ctx) => {
   // sticker, localizacao: o funil e por texto.
   if ('text' in ctx.message) return;
 
-  const lead = leadFromContext(ctx);
+  const lead = await leadFromContext(ctx);
   if (!lead) return;
 
   await ctx.reply('Escreve-me antes por texto, que assim consigo ajudar-te melhor.');

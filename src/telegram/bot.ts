@@ -14,6 +14,7 @@ import {
   recordDepositProof,
   setBettingExperience,
   setCanton,
+  setHumanHandover,
   setJob,
   setDepositPromise,
   setNotes,
@@ -604,6 +605,25 @@ async function runFunnelTurn(
         addMessage({ chatId, role: 'user', content: incoming });
       }
 
+      // O lead disse que nao tem dinheiro para isto, ou que ia pedir
+      // emprestado. A IA nao responde a isto de todo: a conversa passa para
+      // uma pessoa, que le o que ele escreveu e decide o que dizer.
+      //
+      // A resposta que o redator ja escreveu e deitada fora de proposito —
+      // seria o encerramento automatico, e quem manda aqui e quem vai
+      // responder a mao. O estagio tambem nao mexe: isto nao e um lead
+      // perdido, e um lead a espera de uma pessoa.
+      if (directive.shouldStop && directive.stopReason === 'aperto') {
+        // A partir daqui o remarketing tambem nao lhe toca: as listas de
+        // campanha excluem quem esta a ser levado a mao.
+        setHumanHandover(chatId, true);
+        stopTyping();
+
+        log.info(`conversa entregue a mao chat=${chatId}: o lead falou em nao ter dinheiro`);
+        await notifyHandover(current, incoming);
+        return;
+      }
+
       addMessage({
         chatId,
         role: 'assistant',
@@ -733,6 +753,40 @@ bot.on([':photo', ':document'], async (ctx) => {
  * Encaminha o comprovativo a quem valida. Sem isto o registo ficaria so na base
  * de dados e o lead esperaria por alguem que nao sabe que ele existe.
  */
+/**
+ * Avisa-me de que uma conversa passou para as minhas maos.
+ *
+ * Sem isto a entrega era silenciosa: o bot calava-se e o lead ficava a espera
+ * de uma resposta que so aparecia se eu abrisse a app por acaso. O aviso leva
+ * o ID para eu o encontrar de imediato, e a mensagem dele para eu saber do que
+ * se trata sem ter de abrir nada.
+ */
+async function notifyHandover(lead: Lead, incoming: string): Promise<void> {
+  if (adminChatIds.size === 0) {
+    log.error(
+      `conversa do chat ${lead.chatId} entregue a mao, mas nao ha ADMIN_CHAT_IDS ` +
+        'para avisar: ve a caixa de entrada',
+    );
+    return;
+  }
+
+  const text =
+    'Conversa entregue a ti — o lead falou em dinheiro que nao tem\n\n' +
+    `Nome: ${lead.firstName || '(sem nome)'}\n` +
+    `Username: ${lead.username ? `@${lead.username}` : '(sem username)'}\n` +
+    `ID: ${lead.chatId}\n\n` +
+    `Ultima mensagem dele:\n"${incoming.slice(0, 500)}"\n\n` +
+    'O bot esta calado nesta conversa. Responde-lhe pela caixa de entrada.';
+
+  for (const adminId of adminChatIds) {
+    try {
+      await bot.api.sendMessage(adminId, text, { link_preview_options: { is_disabled: true } });
+    } catch (error) {
+      log.error(`falha ao avisar ${adminId} da entrega do chat ${lead.chatId}`, error);
+    }
+  }
+}
+
 async function notifyAdmins(
   proofId: number,
   lead: Lead,

@@ -28,6 +28,19 @@ export const LEAD_PROFILES = [
 
 export type LeadProfile = (typeof LEAD_PROFILES)[number];
 
+/**
+ * Porque e que a venda para.
+ *
+ * - "aperto": ele disse que nao tem dinheiro para isto, que ia pedir
+ *   emprestado ou tirar do que e preciso para as contas. A IA cala-se e a
+ *   conversa passa para uma pessoa, que decide o que dizer.
+ * - "parar": pediu para nao ser incomodado. Encerra-se e fica assim.
+ * - "menor" / "vicio": nao ha venda nem conversa a mao. Encerra-se.
+ */
+export const STOP_REASONS = ['nenhum', 'aperto', 'parar', 'menor', 'vicio'] as const;
+
+export type StopReason = (typeof STOP_REASONS)[number];
+
 export interface SalesDirective {
   /** O que o lead quer neste momento, em uma frase. */
   intent: string;
@@ -71,6 +84,12 @@ export interface SalesDirective {
   notes: string;
   /** Se true, o lead pediu para parar / nao tem perfil: encerrar com respeito. */
   shouldStop: boolean;
+  /**
+   * Porque e que se para. Decide o que acontece a seguir, e nao e a mesma
+   * coisa em todos os casos: "aperto" passa a conversa para uma pessoa, os
+   * outros encerram-na.
+   */
+  stopReason: StopReason;
 }
 
 const responseSchema: Schema = {
@@ -116,6 +135,15 @@ const responseSchema: Schema = {
     includeLink: { type: Type.BOOLEAN, description: 'Incluir o link de afiliado?' },
     notes: { type: Type.STRING, description: 'Fatos a memorizar sobre o lead' },
     shouldStop: { type: Type.BOOLEAN, description: 'O lead pediu para parar?' },
+    stopReason: {
+      type: Type.STRING,
+      enum: [...STOP_REASONS],
+      description:
+        'Se shouldStop=true, PORQUE: "aperto" (disse que nao tem dinheiro ' +
+        'para isto, que ia pedir emprestado ou tirar do dinheiro das contas), ' +
+        '"parar" (pediu para nao ser incomodado), "menor", "vicio". ' +
+        '"nenhum" quando shouldStop=false.',
+    },
   },
   required: [
     'intent',
@@ -133,6 +161,7 @@ const responseSchema: Schema = {
     'includeLink',
     'notes',
     'shouldStop',
+    'stopReason',
   ],
 };
 
@@ -390,6 +419,17 @@ LIMITES INEGOCIAVEIS (violar invalida a diretriz):
   que tem vicio em jogo, ou que tem menos de ${env.MIN_AGE} anos: define
   shouldStop=true. Querer PAGAR o que deve com o que vier a ganhar nao e nada
   disto — e o objetivo dele, e usa-se.
+- Sempre que puseres shouldStop=true, diz PORQUE no campo "stopReason". Nao e
+  detalhe: e o que decide o que acontece a seguir.
+  · "aperto" — ele disse que nao tem dinheiro para isto, que ia pedir
+    emprestado, que tirava da renda ou do dinheiro das contas. Aqui a IA nao
+    responde: a conversa passa para uma pessoa, que le e decide o que dizer.
+    A diretriz deixa de ter valor nenhum neste turno, mas preenche-a na mesma.
+  · "parar" — pediu para nao ser incomodado ou disse que nao tem interesse.
+  · "menor" — disse ter menos de ${env.MIN_AGE} anos.
+  · "vicio" — falou em problema com o jogo, em nao conseguir parar, em ja ter
+    perdido o que nao devia.
+  · "nenhum" — sempre que shouldStop=false.
 - Se o lead pedir para parar ou disser que nao tem interesse, shouldStop=true e
   uma diretriz de encerramento cordial.
 - Urgencia so pode ser real. Nao inventes prazos nem vagas limitadas.
@@ -471,6 +511,7 @@ function fallbackDirective(lead: Lead): SalesDirective {
     includeLink: false,
     notes: '',
     shouldStop: false,
+    stopReason: 'nenhum',
   };
 }
 
@@ -602,6 +643,9 @@ ONDE PARAS MESMO (e so aqui):
   pedir emprestado ou tirar do dinheiro das contas, que esta desesperado, que
   tem problema com o jogo, ou que e menor: shouldStop=true. Ai nao se vende,
   e o encerramento e curto e sem sermao.
+- Nesses casos preenche tambem o "stopReason". Se for dinheiro que ele nao tem
+  ou que ia pedir emprestado, e "aperto", e a conversa deixa de ser da IA:
+  passa para uma pessoa, que responde a mao.
 
 O QUE FAZES AGORA:
 - Conversa de parceiro, nao de vendedor. Amigavel, natural, proxima. Es alguem
@@ -741,6 +785,9 @@ async function requestDirective(params: {
       includeLink: parsed.includeLink === true,
       notes: text(parsed.notes, ''),
       shouldStop: parsed.shouldStop === true,
+      stopReason: STOP_REASONS.includes(parsed.stopReason as StopReason)
+        ? (parsed.stopReason as StopReason)
+        : 'nenhum',
     };
 
     log.debug(`diretriz gerada em ${Date.now() - startedAt}ms`, {

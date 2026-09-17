@@ -560,6 +560,9 @@ const statements = {
     SELECT * FROM leads
      WHERE blocked = 0
        AND remarketing_cancelled = 0
+       -- Conversa levada a mao: quem manda nela sou eu, e um guiao automatico
+       -- por cima do que eu escrevi e o que faz o lead perceber que ha um bot.
+       AND human_handover = 0
        AND stage IN ('registo_enviado', 'registado')
        AND remarketing_touches = 0
        AND promised_at IS NULL
@@ -572,6 +575,8 @@ const statements = {
      WHERE blocked = 0
        -- Ja respondeu a um toque: a campanha acabou para ele.
        AND remarketing_cancelled = 0
+       -- Conversa levada a mao: nao entra em campanha nenhuma.
+       AND human_handover = 0
        AND stage NOT IN ('perdido', ${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
        -- Toque exacto, e nao "menos de N": cada toque tem texto proprio, e a
        -- lista de um toque nao pode levar a mensagem do outro.
@@ -587,6 +592,8 @@ const statements = {
   targetsVip: db.prepare(`
     SELECT * FROM leads
      WHERE blocked = 0
+       -- Conversa levada a mao: nao entra em campanha nenhuma.
+       AND human_handover = 0
        AND stage IN (${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
        AND (last_remarketing_at IS NULL OR last_remarketing_at <= datetime('now', ?))
      ORDER BY updated_at ASC

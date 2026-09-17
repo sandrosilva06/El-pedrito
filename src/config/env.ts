@@ -191,6 +191,24 @@ const schema = z
     RATE_LIMIT_WINDOW_SECONDS: intFromString(60, 1, 3600),
 
     ADMIN_CHAT_IDS: csvNumbers,
+    /**
+     * Leads que voltam SEMPRE, aprovados e afixados, a cada arranque.
+     *
+     * Enquanto a base de dados viver dentro da pasta da aplicacao, um deploy
+     * apaga-a: os leads, o historico e o estado do remarketing desaparecem. Um
+     * lead que ja depositou e ja esta no grupo nao pode depender disso — a
+     * seguir ao deploy o bot trata-o como um desconhecido e recomeca o funil
+     * com quem ja pagou.
+     *
+     * Aqui ficam os chat_id desses, separados por virgula e opcionalmente com
+     * o nome a seguir a dois pontos:
+     *   VIP_CHAT_IDS=739726043:Super digital,123456:Outro
+     *
+     * Isto nao substitui um disco persistente — o historico da conversa nao
+     * volta — mas garante que o lead volta a existir, no estagio certo, no
+     * acompanhamento VIP e no topo da caixa de entrada.
+     */
+    VIP_CHAT_IDS: optionalString,
 
     // --- Caixa de entrada -------------------------------------------------
     /**
@@ -247,7 +265,33 @@ export type Env = Omit<
   databaseIsEphemeral: boolean;
   /** A caixa de entrada esta utilizavel: ha palavra-passe suficientemente longa. */
   inboxEnabled: boolean;
+  /** Leads que voltam sempre: aprovados e afixados a cada arranque. */
+  vipLeads: Array<{ chatId: number; firstName: string | null }>;
 };
+
+/**
+ * "739726043:Super digital,123456" -> lista de leads a repor no arranque.
+ *
+ * O nome e opcional e so serve para a conversa nao aparecer como "#739726043"
+ * na caixa de entrada enquanto o lead nao voltar a escrever. Entradas sem um
+ * numero valido sao ignoradas em silencio: uma variavel mal escrita nao pode
+ * impedir o servico de arrancar.
+ */
+function parseVipLeads(raw: string | undefined): Array<{ chatId: number; firstName: string | null }> {
+  if (!raw) return [];
+
+  return raw
+    .split(',')
+    .map((entry) => {
+      const [id, ...rest] = entry.split(':');
+      const chatId = Number((id ?? '').trim());
+      if (!Number.isInteger(chatId) || chatId === 0) return null;
+
+      const firstName = rest.join(':').trim();
+      return { chatId, firstName: firstName.length > 0 ? firstName : null };
+    })
+    .filter((lead): lead is { chatId: number; firstName: string | null } => lead !== null);
+}
 
 /**
  * O Telegram so autentica o webhook pelo header de segredo. Exigir a variavel
@@ -383,6 +427,7 @@ function load(): Env {
     databaseIsEphemeral:
       databaseFile !== ':memory:' &&
       !path.relative(process.cwd(), databaseFile).startsWith('..'),
+    vipLeads: parseVipLeads(value.VIP_CHAT_IDS),
   };
 }
 

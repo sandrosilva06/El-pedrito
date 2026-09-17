@@ -4,7 +4,12 @@ import express from 'express';
 import { webhookCallback } from 'grammy';
 
 import { env, isProduction } from './config/env';
-import { closeDatabase, getStats, pruneProcessedUpdates } from './db/database';
+import {
+  closeDatabase,
+  getStats,
+  pruneProcessedUpdates,
+  restoreVipLeads,
+} from './db/database';
 import { startRemarketingScheduler, stopRemarketingScheduler } from './scheduler/remarketing';
 import { BOT_COMMANDS, bot } from './telegram/bot';
 import { createInboxRouter } from './web/inbox';
@@ -165,6 +170,17 @@ async function start(): Promise<void> {
 
     if (isProduction) log.error(aviso);
     else log.info(`base de dados local em ${env.databaseFile} (efemera, normal em desenvolvimento)`);
+  }
+
+  // Repoe quem ja pagou. Corre SEMPRE, e nao so quando a base de dados e
+  // efemera: e idempotente, e assim o estagio e o afixado ficam garantidos em
+  // qualquer arranque.
+  if (env.vipLeads.length > 0) {
+    const repostos = restoreVipLeads(env.vipLeads);
+    log.info(
+      `VIP_CHAT_IDS: ${env.vipLeads.length} lead(s) aprovados e afixados` +
+        `${repostos > 0 ? `, ${repostos} recriado(s) do zero` : ''}`,
+    );
   }
 
   if (env.modeSource === 'forcado-em-producao') {

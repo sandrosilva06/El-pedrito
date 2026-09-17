@@ -1007,6 +1007,54 @@ export function setCanton(chatId: number, canton: string): void {
 }
 
 /**
+ * Repoe os leads aprovados listados no VIP_CHAT_IDS.
+ *
+ * Enquanto a base de dados viver dentro da pasta da aplicacao, cada deploy
+ * apaga tudo. Quem ja depositou e ja esta no grupo nao pode depender disso: a
+ * seguir ao deploy o bot trata-o como desconhecido, recomeça o funil e pede o
+ * registo a quem ja pagou. Isto corre no arranque e devolve-o ao estagio de
+ * acesso liberado, afixado no topo da caixa.
+ *
+ * Nao substitui um disco persistente — o historico da conversa nao volta — e
+ * por isso deixa uma marca no historico, para o estrategista saber com quem
+ * esta a falar mesmo com a conversa vazia.
+ *
+ * E idempotente: correr isto num arranque onde a base de dados sobreviveu nao
+ * mexe em nada a nao ser garantir o estagio e o afixado.
+ */
+export function restoreVipLeads(
+  leads: Array<{ chatId: number; firstName: string | null }>,
+): number {
+  let restored = 0;
+
+  for (const lead of leads) {
+    const existing = getLead(lead.chatId);
+
+    upsertLead({ chatId: lead.chatId, firstName: lead.firstName });
+    setStage(lead.chatId, 'acesso_liberado');
+    setPinned(lead.chatId, true);
+
+    // Conversa vazia: o lead foi criado agora, ou perdeu o historico no
+    // deploy. A marca evita que o funil recomece do zero com quem ja pagou.
+    if (getRecentMessages(lead.chatId, 1).length === 0) {
+      addMessage({
+        chatId: lead.chatId,
+        role: 'user',
+        content:
+          '[lead ja validado: depositou, foi aprovado a mao e ja esta dentro do grupo VIP. ' +
+          'O historico anterior nao esta disponivel. NAO recomeces o funil nem peças registo ' +
+          'ou deposito: o que se faz aqui e acompanhar como lhe esta a correr]',
+        author: 'sistema',
+      });
+    }
+
+    if (!existing) restored += 1;
+  }
+
+  return restored;
+}
+
+/**
  * Afixa ou desafixa o lead no topo da caixa de entrada.
  *
  * E so ordenacao: nao mexe no estagio, no remarketing nem no que o bot diz.

@@ -370,11 +370,11 @@ async function actualizarConversa(irAoFundo) {
   $('alternar-vip').textContent = lead.stage === 'acesso_liberado' ? 'Aprovado ✓' : 'Aprovar';
 
   const html = messages.map((m) => {
-    // Notas internas para a IA (conversa recuperada, marcador de imagem,
-    // lead já validado). Não são mensagens trocadas com ninguém e não têm
-    // nada que fazer na conversa: quem abre a app quer ver o que foi dito.
-    // As que trazem imagem ficam, porque a imagem é mesmo do lead.
-    if (m.author === 'sistema' && !m.mediaFileId) return '';
+    // Notas internas para a IA: são gravadas do LADO DO LEAD (role 'user')
+    // sem ele ter escrito nada. A mensagem do remarketing e a de boas-vindas
+    // ao VIP também são 'sistema', mas foram mesmo enviadas e aparecem — o
+    // critério é este e não o autor, senão desapareciam do ecrã.
+    if (m.role === 'user' && m.author === 'sistema' && !m.mediaFileId) return '';
 
     if (m.content.startsWith('[')) {
       return '<div class="marcador">' + escapar(m.content) + '</div>';
@@ -419,7 +419,16 @@ async function actualizarConversa(irAoFundo) {
 
   const fundo = $('mensagens');
   const estavaNoFundo = fundo.scrollHeight - fundo.scrollTop - fundo.clientHeight < 60;
-  fundo.innerHTML = html || '<div class="vazio">Sem mensagens.</div>';
+  // Uma conversa recuperada só tem a nota interna, que não se mostra: sem isto
+  // o ecrã ficava em branco e parecia avariado.
+  const soNotas = messages.length > 0 && !html.trim();
+  fundo.innerHTML =
+    html ||
+    (soNotas
+      ? '<div class="vazio">Este lead já falou com o bot, mas o texto das mensagens ' +
+        'anteriores perdeu-se num deploy antigo. O que ele escrever a partir de agora ' +
+        'aparece aqui.</div>'
+      : '<div class="vazio">Sem mensagens.</div>');
   if (irAoFundo || estavaNoFundo) fundo.scrollTop = fundo.scrollHeight;
 }
 
@@ -587,11 +596,45 @@ $('texto').addEventListener('input', (e) => {
 
 // Actualiza so com a conversa aberta e o separador a vista: sem isto o Render
 // levava com pedidos de telemoveis esquecidos no bolso.
+//
+// Continua a existir por baixo do tempo real, como rede: se a ligacao de
+// eventos cair e o browser demorar a reconectar, a conversa aberta actualiza-se
+// na mesma, so que mais devagar.
 function agendar() {
   clearInterval(temporizador);
   temporizador = setInterval(() => {
     if (chatAberto !== null && !document.hidden) actualizarConversa(false).catch(() => {});
-  }, 6000);
+  }, 15000);
+}
+
+/**
+ * Liga o fluxo em tempo real.
+ *
+ * O EventSource reconecta sozinho quando a rede falha, por isso não há aqui
+ * lógica de reconexão nenhuma — o browser trata disso.
+ */
+let fluxo = null;
+
+function ligarTempoReal() {
+  if (fluxo) fluxo.close();
+  fluxo = new EventSource('/api/eventos');
+
+  fluxo.addEventListener('mensagem', (e) => {
+    const m = JSON.parse(e.data);
+
+    // Nota interna: não é conversa, não mexe em nada do que se vê.
+    if (m.interna) return;
+
+    // Conversa aberta: a mensagem entra na hora.
+    if (chatAberto === m.chatId) actualizarConversa(false).catch(() => {});
+
+    // A lista sobe a conversa ao topo com a pré-visualização nova.
+    carregarLista().catch(() => {});
+  });
+
+  // Lead novo: aparece no topo sem ninguém dar F5.
+  fluxo.addEventListener('lead-novo', () => { carregarLista().catch(() => {}); });
+  fluxo.addEventListener('lead-mudou', () => { carregarLista().catch(() => {}); });
 }
 
 async function arrancar() {
@@ -603,6 +646,7 @@ async function arrancar() {
   mostrar('lista');
   await carregarBots();
   await carregarLista();
+  ligarTempoReal();
 }
 
 arrancar();

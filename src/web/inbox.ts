@@ -16,6 +16,7 @@ import {
   type FunnelStage,
 } from '../db/database';
 import { bot, invalidateChat, resumeWithAi, sendVipWelcome } from '../telegram/bot';
+import { eventos } from '../utils/eventos';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('inbox');
@@ -214,6 +215,51 @@ export function createInboxRouter(): Router {
   // --- Daqui para baixo, so com credencial ---------------------------------
 
   router.use(requireAuth);
+
+  /**
+   * Fluxo em tempo real, por Server-Sent Events.
+   *
+   * Cada separador aberto da caixa mantem esta ligacao. Quando chega uma
+   * mensagem — do lead, da IA, do remarketing ou minha — ou entra um lead
+   * novo, o evento sai daqui e o ecra actualiza-se sozinho.
+   *
+   * SSE e nao WebSocket porque o trafego e todo num sentido (servidor para
+   * browser) e isto nao traz dependencia nenhuma, reconecta sozinho e passa em
+   * qualquer proxy que ja sirva HTTP. Um socket.io aqui seria um servidor e um
+   * cliente inteiros para fazer menos.
+   */
+  router.get('/eventos', (req, res) => {
+    res.set({
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      // O Render poe um proxy a frente. Sem isto o buffer dele segura os
+      // eventos e o "tempo real" chega em blocos de vez em quando.
+      'x-accel-buffering': 'no',
+    });
+    res.flushHeaders?.();
+    res.write('retry: 3000\n\n');
+
+    const enviar = (tipo: string, dados: unknown) => {
+      res.write(`event: ${tipo}\ndata: ${JSON.stringify(dados)}\n\n`);
+    };
+
+    const largar = [
+      eventos.ao('mensagem', (m) => enviar('mensagem', m)),
+      eventos.ao('lead-novo', (l) => enviar('lead-novo', l)),
+      eventos.ao('lead-mudou', (l) => enviar('lead-mudou', l)),
+    ];
+
+    // Um comentario de 25 em 25 segundos: o Render fecha ligacoes ociosas ao
+    // fim de pouco tempo, e sem isto o ecra deixava de receber sem aviso.
+    const pulso = setInterval(() => res.write(': pulso\n\n'), 25_000);
+
+    req.on('close', () => {
+      clearInterval(pulso);
+      for (const parar of largar) parar();
+      res.end();
+    });
+  });
 
   /** Que bots a caixa conhece. O primeiro e sempre este servico. */
   router.get('/bots', (_req, res) => {

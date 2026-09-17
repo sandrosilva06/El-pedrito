@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
+import { ehNotaInterna, eventos } from '../utils/eventos';
 
 const log = createLogger('db');
 
@@ -453,12 +454,14 @@ const statements = {
    */
   inboxLeads: db.prepare(`
     SELECT l.*,
-           -- A pre-visualizacao ignora as marcas de sistema: sao instrucoes
-           -- internas para a IA e nao mensagens trocadas com o lead. Apareciam
-           -- na lista como se fossem a ultima coisa dita, o que e falso.
-           (SELECT content    FROM messages m WHERE m.chat_id = l.chat_id AND m.author <> 'sistema' ORDER BY m.id DESC LIMIT 1) AS last_content,
-           (SELECT role       FROM messages m WHERE m.chat_id = l.chat_id AND m.author <> 'sistema' ORDER BY m.id DESC LIMIT 1) AS last_role,
-           (SELECT created_at FROM messages m WHERE m.chat_id = l.chat_id AND m.author <> 'sistema' ORDER BY m.id DESC LIMIT 1) AS last_at,
+           -- A pre-visualizacao ignora as NOTAS INTERNAS, e nao tudo o que
+           -- tem author 'sistema'. A diferenca importa: uma nota interna e
+           -- gravada do lado do lead (role='user') sem ele ter escrito nada;
+           -- a mensagem do remarketing e a de boas-vindas ao VIP tambem sao
+           -- 'sistema', mas foram MESMO enviadas e tem de aparecer.
+           (SELECT content    FROM messages m WHERE m.chat_id = l.chat_id AND NOT (m.role = 'user' AND m.author = 'sistema' AND m.media_file_id IS NULL) ORDER BY m.id DESC LIMIT 1) AS last_content,
+           (SELECT role       FROM messages m WHERE m.chat_id = l.chat_id AND NOT (m.role = 'user' AND m.author = 'sistema' AND m.media_file_id IS NULL) ORDER BY m.id DESC LIMIT 1) AS last_role,
+           (SELECT created_at FROM messages m WHERE m.chat_id = l.chat_id AND NOT (m.role = 'user' AND m.author = 'sistema' AND m.media_file_id IS NULL) ORDER BY m.id DESC LIMIT 1) AS last_at,
            (SELECT id         FROM messages m WHERE m.chat_id = l.chat_id ORDER BY m.id DESC LIMIT 1) AS last_id
       FROM leads l
      WHERE (? = '' OR lower(coalesce(l.first_name, '') || ' ' || coalesce(l.username, '')) LIKE '%' || ? || '%')
@@ -744,6 +747,11 @@ export function upsertLead(input: {
   username?: string | null;
   languageCode?: string | null;
 }): Lead {
+  // Saber se ja existia ANTES de escrever: e o que distingue um lead novo, que
+  // tem de aparecer na caixa de entrada na hora, de uma actualizacao de quem
+  // ja la esta.
+  const existia = asRow<LeadRow>(statements.getLead.get(input.chatId)) !== undefined;
+
   statements.upsertLead.run(
     input.chatId,
     input.firstName ?? null,
@@ -757,7 +765,19 @@ export function upsertLead(input: {
     throw new Error(`Falha ao persistir o lead ${input.chatId}`);
   }
 
-  return mapLead(row);
+  const lead = mapLead(row);
+
+  if (!existia) {
+    eventos.emitir('lead-novo', {
+      chatId: lead.chatId,
+      firstName: lead.firstName,
+      lastName: lead.lastName,
+      username: lead.username,
+      stage: lead.stage,
+    });
+  }
+
+  return lead;
 }
 
 export function getLead(chatId: number): Lead | null {
@@ -811,6 +831,22 @@ export function addMessage(input: {
       input.directive ?? null,
     );
     statements.bumpMessageCount.run(input.chatId);
+  });
+
+  // A caixa de entrada ouve isto e mostra a mensagem no instante em que ela
+  // existe, sem esperar pelo ciclo de recarga nem por um F5.
+  eventos.emitir('mensagem', {
+    chatId: input.chatId,
+    role: input.role,
+    author: input.author ?? 'bot',
+    content: input.content,
+    mediaFileId: input.mediaFileId ?? null,
+    createdAt: new Date().toISOString(),
+    interna: ehNotaInterna({
+      role: input.role,
+      author: input.author ?? 'bot',
+      mediaFileId: input.mediaFileId ?? null,
+    }),
   });
 }
 

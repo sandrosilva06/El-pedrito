@@ -63,6 +63,8 @@ export interface Lead {
   promisedAt: string | null;
   /** O que ele disse, para o lembrete nao soar generico. */
   promiseNote: string | null;
+  /** Apelido, quando o Telegram o da. */
+  lastName: string | null;
   /** Cantao onde vive, assim que o disser. Null enquanto nao se souber. */
   canton: string | null;
   /**
@@ -169,6 +171,7 @@ interface LeadRow {
   promised_at: string | null;
   promise_note: string | null;
   canton: string | null;
+  last_name: string | null;
   pinned: number;
   job: string | null;
   betting_experience: string | null;
@@ -298,6 +301,8 @@ addColumnIfMissing('leads', 'job', 'TEXT');
 // Lead afixado no topo da caixa de entrada. Quem ja depositou nao pode ficar
 // perdido no meio de dezenas de conversas novas.
 addColumnIfMissing('leads', 'pinned', 'INTEGER NOT NULL DEFAULT 0');
+// Apelido, quando o Telegram o da. So o first_name e garantido.
+addColumnIfMissing('leads', 'last_name', 'TEXT');
 
 /**
  * Updates do Telegram ja processados.
@@ -374,6 +379,7 @@ function mapLead(row: LeadRow): Lead {
     promisedAt: row.promised_at,
     promiseNote: row.promise_note,
     canton: row.canton,
+    lastName: row.last_name,
     pinned: row.pinned === 1,
     job: row.job,
     bettingExperience: row.betting_experience,
@@ -447,9 +453,12 @@ const statements = {
    */
   inboxLeads: db.prepare(`
     SELECT l.*,
-           (SELECT content    FROM messages m WHERE m.chat_id = l.chat_id ORDER BY m.id DESC LIMIT 1) AS last_content,
-           (SELECT role       FROM messages m WHERE m.chat_id = l.chat_id ORDER BY m.id DESC LIMIT 1) AS last_role,
-           (SELECT created_at FROM messages m WHERE m.chat_id = l.chat_id ORDER BY m.id DESC LIMIT 1) AS last_at,
+           -- A pre-visualizacao ignora as marcas de sistema: sao instrucoes
+           -- internas para a IA e nao mensagens trocadas com o lead. Apareciam
+           -- na lista como se fossem a ultima coisa dita, o que e falso.
+           (SELECT content    FROM messages m WHERE m.chat_id = l.chat_id AND m.author <> 'sistema' ORDER BY m.id DESC LIMIT 1) AS last_content,
+           (SELECT role       FROM messages m WHERE m.chat_id = l.chat_id AND m.author <> 'sistema' ORDER BY m.id DESC LIMIT 1) AS last_role,
+           (SELECT created_at FROM messages m WHERE m.chat_id = l.chat_id AND m.author <> 'sistema' ORDER BY m.id DESC LIMIT 1) AS last_at,
            (SELECT id         FROM messages m WHERE m.chat_id = l.chat_id ORDER BY m.id DESC LIMIT 1) AS last_id
       FROM leads l
      WHERE (? = '' OR lower(coalesce(l.first_name, '') || ' ' || coalesce(l.username, '')) LIKE '%' || ? || '%')
@@ -536,6 +545,20 @@ const statements = {
      WHERE chat_id = ? AND (canton IS NULL OR canton = '')
   `),
   setPinned: db.prepare('UPDATE leads SET pinned = ? WHERE chat_id = ?'),
+  setIdentity: db.prepare(`
+    UPDATE leads
+       SET first_name = coalesce(?, first_name),
+           last_name = coalesce(?, last_name),
+           username = coalesce(?, username)
+     WHERE chat_id = ?
+  `),
+  leadsWithoutName: db.prepare(`
+    SELECT chat_id FROM leads
+     WHERE (first_name IS NULL OR first_name = '')
+       AND blocked = 0
+     ORDER BY updated_at DESC
+     LIMIT ?
+  `),
   setStage: db.prepare("UPDATE leads SET stage = ?, updated_at = datetime('now') WHERE chat_id = ?"),
   setJob: db.prepare(`
     UPDATE leads SET job = ?, updated_at = datetime('now')
@@ -1120,6 +1143,33 @@ export function setPinned(chatId: number, pinned: boolean): void {
  */
 export function setStage(chatId: number, stage: FunnelStage): void {
   statements.setStage.run(stage, chatId);
+}
+
+/**
+ * Guarda o nome e o username que o Telegram devolve.
+ *
+ * Os leads recuperados dos logs vinham so com o chat_id, e apareciam na caixa
+ * de entrada como "#8962954467". Isto preenche-os a partir do getChat, e
+ * tambem corrige quem tenha mudado de nome ou de username entretanto.
+ */
+export function setIdentity(
+  chatId: number,
+  identity: { firstName: string | null; lastName: string | null; username: string | null },
+): void {
+  statements.setIdentity.run(
+    identity.firstName,
+    identity.lastName,
+    identity.username,
+    chatId,
+  );
+}
+
+/** Leads sem nome nenhum: sao estes que aparecem como "#id" na caixa. */
+export function leadsSemNome(limit = 200): number[] {
+  const rows = asRows<{ chat_id: number }>(
+    statements.leadsWithoutName.all(Math.max(1, Math.min(limit, 1000))),
+  );
+  return rows.map((row) => row.chat_id);
 }
 
 /** A primeira resposta e a boa: escritas seguintes sao ignoradas no SQL. */

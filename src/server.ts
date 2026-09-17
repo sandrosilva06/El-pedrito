@@ -12,6 +12,7 @@ import {
   restoreVipLeads,
 } from './db/database';
 import { backupDatabase } from './db/backup';
+import { preencherNomes } from './telegram/identidades';
 import { LEADS_RECUPERADOS } from './db/leads-recuperados';
 import { startRemarketingScheduler, stopRemarketingScheduler } from './scheduler/remarketing';
 import { BOT_COMMANDS, bot } from './telegram/bot';
@@ -198,6 +199,13 @@ async function start(): Promise<void> {
       log.info(`recuperacao: ${criados} lead(s) repostos dos logs (${existentes} ja existiam)`);
     }
   }
+
+  // Os leads recuperados dos logs vieram so com o chat_id e apareciam na caixa
+  // de entrada como "#8962954467". O Telegram sabe o nome de quem ja falou com
+  // o bot: isto vai busca-lo, em fundo para nao atrasar o arranque.
+  void preencherNomes(bot.api).catch((error: unknown) => {
+    log.warn('falha a preencher nomes dos leads', error);
+  });
 
   // Backup periodico para o canal. Enquanto nao houver disco persistente, e o
   // que fica entre um deploy e perder tudo outra vez.

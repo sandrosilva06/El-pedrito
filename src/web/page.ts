@@ -244,6 +244,17 @@ function quando(iso) {
     : d.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' });
 }
 
+/**
+ * Nome a mostrar. Primeiro e apelido quando existem, senao o username, e só
+ * em último caso o número — que é o que se via em todos os leads recuperados.
+ */
+function nomeDe(l) {
+  const completo = [l.firstName, l.lastName].filter(Boolean).join(' ').trim();
+  if (completo) return completo;
+  if (l.username) return '@' + l.username;
+  return '#' + l.chatId;
+}
+
 function iniciais(nome) {
   return (nome || '?').trim().slice(0, 1).toUpperCase() || '?';
 }
@@ -291,7 +302,7 @@ async function carregarLista() {
   }
 
   $('conversas').innerHTML = leads.map((l) => {
-    const nome = l.firstName || ('#' + l.chatId);
+    const nome = nomeDe(l);
     const etiquetas =
       (l.pinned ? '<span class="etiqueta afixado">★ afixado</span>' : '') +
       (l.stage === 'acesso_liberado' ? '<span class="etiqueta vip">VIP</span>' : '') +
@@ -347,7 +358,7 @@ async function actualizarConversa(irAoFundo) {
   ]);
 
   leadAberto = lead;
-  $('lead-nome').textContent = lead.firstName || ('#' + lead.chatId);
+  $('lead-nome').textContent = nomeDe(lead);
   $('lead-info').textContent =
     [lead.username ? '@' + lead.username : null, lead.stage, lead.canton, '#' + lead.chatId]
       .filter(Boolean).join(' · ');
@@ -359,6 +370,12 @@ async function actualizarConversa(irAoFundo) {
   $('alternar-vip').textContent = lead.stage === 'acesso_liberado' ? 'Aprovado ✓' : 'Aprovar';
 
   const html = messages.map((m) => {
+    // Notas internas para a IA (conversa recuperada, marcador de imagem,
+    // lead já validado). Não são mensagens trocadas com ninguém e não têm
+    // nada que fazer na conversa: quem abre a app quer ver o que foi dito.
+    // As que trazem imagem ficam, porque a imagem é mesmo do lead.
+    if (m.author === 'sistema' && !m.mediaFileId) return '';
+
     if (m.content.startsWith('[')) {
       return '<div class="marcador">' + escapar(m.content) + '</div>';
     }

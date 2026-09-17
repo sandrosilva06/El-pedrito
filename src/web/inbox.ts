@@ -17,6 +17,7 @@ import {
 } from '../db/database';
 import { bot, invalidateChat, resumeWithAi, sendVipWelcome } from '../telegram/bot';
 import { eventos } from '../utils/eventos';
+import { guiaoDisparoManual } from '../services/remarketing';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('inbox');
@@ -512,6 +513,62 @@ export function createInboxRouter(): Router {
     const respondeu = enabled ? false : resumeWithAi(chatId);
 
     res.json({ ok: true, humanHandover: enabled, respondeu });
+  });
+
+  /**
+   * Disparo manual de remarketing, a partir da conversa aberta.
+   *
+   * Sao os dois botoes da barra: um para quem ainda nao converteu, outro para
+   * quem ja esta no grupo. A diferenca esta no guiao, nao no mecanismo.
+   *
+   * Ao contrario da resposta a mao, isto NAO assume a conversa: o lead responde
+   * e a IA continua o atendimento. E um empurrao, nao uma tomada de controlo —
+   * se assumisse, cada disparo obrigava-me a voltar a app para devolver o lead
+   * ao bot.
+   */
+  router.post('/leads/:chatId/remarketing', async (req, res) => {
+    const chatId = parseChatId(req.params.chatId);
+    if (chatId === null) {
+      res.status(400).json({ error: 'chat_id invalido' });
+      return;
+    }
+
+    const tipo = String((req.body as { tipo?: unknown })?.tipo ?? '');
+    if (tipo !== 'nao_qualificado' && tipo !== 'qualificado') {
+      res.status(400).json({ error: 'tipo invalido' });
+      return;
+    }
+
+    const lead = getLead(chatId);
+    if (!lead) {
+      res.status(404).json({ error: 'lead desconhecido' });
+      return;
+    }
+
+    const texto = guiaoDisparoManual(tipo, lead.firstName);
+
+    try {
+      const sent = await bot.api.sendMessage(chatId, texto, {
+        link_preview_options: { is_disabled: true },
+      });
+
+      // Gravada como 'sistema': nao foi a IA a compo-la nem fui eu a escreve-la,
+      // saiu de um guiao. Continua a ser uma mensagem REAL enviada ao lead, por
+      // isso aparece na conversa e na pre-visualizacao como qualquer outra.
+      addMessage({ chatId, role: 'assistant', content: texto, author: 'sistema' });
+
+      log.info(`remarketing manual (${tipo}) enviado ao chat ${chatId}`);
+      res.json({ ok: true, texto, messageId: sent.message_id });
+    } catch (error) {
+      const description = error instanceof GrammyError ? error.description : String(error);
+
+      if (error instanceof GrammyError && /blocked|deactivated/i.test(description)) {
+        markBlocked(chatId);
+      }
+
+      log.error(`falha no remarketing manual ao chat ${chatId}`, error);
+      res.status(502).json({ error: description });
+    }
   });
 
   /** Afixar no topo da lista. Nao mexe no funil: e so para nao se perder. */

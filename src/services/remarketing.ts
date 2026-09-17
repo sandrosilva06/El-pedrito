@@ -54,6 +54,48 @@ sem queixume por ele nao ter respondido ao primeiro.`,
   },
 ];
 
+/**
+ * Guioes dos disparos manuais da caixa de entrada.
+ *
+ * Sao diferentes dos do remarketing automatico de proposito: estes saem quando
+ * EU carrego no botao, a olhar para a conversa, e nao quando um agendador
+ * decide. Por isso vao direitos ao assunto em vez de comecarem por cumprimentar
+ * como quem se lembrou da pessoa.
+ *
+ * Ha varios por botao e escolhe-se um a sorte: disparar o mesmo texto a dez
+ * leads faz com que dois que se conhecam percebam que e automatico.
+ */
+export const DISPAROS_MANUAIS = {
+  /**
+   * Lead que ainda nao converteu. A expressao "green atras de green" e
+   * obrigatoria — e a forma como a casa descreve a sequencia do grupo, e o que
+   * faz o lead sentir que esta a ficar de fora.
+   */
+  nao_qualificado: [
+    'Mano, a malta no VIP está a fazer green atrás de green hoje! Vamos fechar o teu registo para começares a lucrar também?',
+    'Boas {nome}! Hoje está a sair green atrás de green no grupo. Falta-te só fechares o registo para entrares nisto connosco.',
+    '{nome}, o pessoal lá dentro está em green atrás de green e tu ainda estás de fora. Bora tratar do teu registo?',
+  ],
+  /**
+   * Lead que ja pagou e ja esta no grupo. Aqui nao ha nada para vender: e
+   * acompanhamento, e a pergunta serve para ele responder.
+   */
+  qualificado: [
+    'Fala parceiro! Já viste as tips de hoje no canal VIP? Como é que está a correr a tua gestão de banca por aí?',
+    'Tudo bem {nome}? Como é que te tem corrido lá dentro? Tens conseguido acompanhar as entradas todas do dia?',
+    '{nome}, tudo fixe? Passa pelo VIP para veres as de hoje. Diz-me como está a correr a tua banca.',
+  ],
+} as const;
+
+export type TipoDisparo = keyof typeof DISPAROS_MANUAIS;
+
+/** Escolhe um guiao do botao, ja com o nome do lead colocado. */
+export function guiaoDisparoManual(tipo: TipoDisparo, firstName: string | null): string {
+  const opcoes = DISPAROS_MANUAIS[tipo];
+  const escolhido = opcoes[Math.floor(Math.random() * opcoes.length)] ?? opcoes[0];
+  return personalise(escolhido, firstName);
+}
+
 const FALLBACK_SCRIPTS: Record<RemarketingAudience, string[]> = {
   // Usado so se alguem pedir "nao_convertido" sem dizer o toque; o caminho
   // normal passa pelo NAO_CONVERTIDO_TOUCHES acima.

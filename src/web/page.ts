@@ -147,6 +147,37 @@ export const ADMIN_HTML = String.raw`<!doctype html>
   #lupa.activo { display: grid; }
   #lupa img { max-width: 100%; max-height: 100%; object-fit: contain; }
 
+  /* --- botoes de remarketing, lado a lado --- */
+  .remk { display: flex; gap: 6px; }
+  .remk button {
+    border: 0; border-radius: 8px; padding: 7px 10px; font-size: 12px;
+    font-weight: 600; cursor: pointer; white-space: nowrap; line-height: 1;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .remk button[disabled] { opacity: .6; cursor: default; }
+  .remk .frio { background: #4a3410; color: #f0b429; }
+  .remk .vip  { background: #2e2350; color: #b9a6ff; }
+
+  /* O spinner ocupa o lugar do ponto, para o botao nao mudar de largura a
+     meio do envio e saltar debaixo do dedo. */
+  .girar {
+    width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0;
+    border: 2px solid currentColor; border-top-color: transparent;
+    animation: roda .6s linear infinite;
+  }
+  @keyframes roda { to { transform: rotate(360deg); } }
+
+  #toast {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 40;
+    background: #123524; color: #6fe0a0; border: 1px solid #1d5c3c;
+    padding: 10px 16px; border-radius: 999px; font-size: 13px; font-weight: 600;
+    opacity: 0; pointer-events: none; transition: opacity .18s;
+    max-width: calc(100% - 32px); text-align: center;
+  }
+  #toast.activo { opacity: 1; }
+  #toast.mau { background: #3a1a1c; color: #f2a0a4; border-color: #5c2226; }
+
   .aviso { padding: 10px 12px; font-size: 13px; text-align: center; }
   .aviso.mao { background: var(--manual); color: #e8c86a; }
   .aviso.erro { background: #3a1a1c; color: #f2a0a4; }
@@ -188,6 +219,17 @@ export const ADMIN_HTML = String.raw`<!doctype html>
     <button class="botao discreto" id="alternar-vip">Aprovar</button>
     <button class="botao discreto" id="alternar-mao">Assumir</button>
   </div>
+  <div class="barra" style="border-bottom:1px solid var(--linha);padding-top:8px;padding-bottom:8px;">
+    <div class="sub" style="flex:1;min-width:0;">Remarketing</div>
+    <div class="remk">
+      <button class="frio" id="remk-frio" title="Para quem ainda não converteu">
+        Não qualificado
+      </button>
+      <button class="vip" id="remk-vip" title="Para quem já está no grupo">
+        Qualificado
+      </button>
+    </div>
+  </div>
   <div id="aviso-mao" class="aviso mao" hidden>Estás a levar esta conversa. O bot não responde.</div>
   <div class="mensagens" id="mensagens"></div>
   <div class="compositor">
@@ -197,6 +239,8 @@ export const ADMIN_HTML = String.raw`<!doctype html>
     <button class="botao" id="enviar">Enviar</button>
   </div>
 </section>
+
+<div id="toast"></div>
 
 <div id="previa">
   <div class="imagem"><img id="previa-img" alt=""></div>
@@ -437,6 +481,61 @@ $('voltar').addEventListener('click', () => {
   clearInterval(temporizador);
   mostrar('lista');
   carregarLista();
+});
+
+/**
+ * Aviso curto no fundo do ecrã. Sem isto o operador carrega no botão e não
+ * sabe se a mensagem saiu ou se falhou em silêncio.
+ */
+let toastTimer = null;
+
+function toast(texto, mau) {
+  const el = $('toast');
+  el.textContent = texto;
+  el.classList.toggle('mau', Boolean(mau));
+  el.classList.add('activo');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('activo'), 2600);
+}
+
+/**
+ * Dispara um dos dois remarketings.
+ *
+ * O botão fica desligado com um spinner até à confirmação: são mensagens
+ * reais para pessoas reais, e dois toques distraídos mandavam duas.
+ */
+async function dispararRemarketing(botao, tipo) {
+  if (chatAberto === null || botao.disabled) return;
+
+  const original = botao.innerHTML;
+  botao.disabled = true;
+  botao.innerHTML = '<span class="girar"></span>' + original;
+
+  try {
+    // O api() já levanta erro quando a resposta não é 200, com a descrição
+    // que veio do Telegram.
+    await api('/leads/' + chatAberto + '/remarketing', {
+      method: 'POST', body: JSON.stringify({ tipo }),
+    });
+
+    toast('Remarketing enviado com sucesso!');
+    // A conversa actualiza-se sozinha pelo fluxo de eventos; isto é só para
+    // o caso de a ligação em tempo real estar em baixo.
+    await actualizarConversa(true);
+  } catch (e) {
+    toast('Não saiu: ' + (e.message || 'erro'), true);
+  } finally {
+    botao.disabled = false;
+    botao.innerHTML = original;
+  }
+}
+
+$('remk-frio').addEventListener('click', (e) => {
+  void dispararRemarketing(e.currentTarget, 'nao_qualificado');
+});
+
+$('remk-vip').addEventListener('click', (e) => {
+  void dispararRemarketing(e.currentTarget, 'qualificado');
 });
 
 $('alternar-afixar').addEventListener('click', async () => {

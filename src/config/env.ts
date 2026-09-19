@@ -133,8 +133,15 @@ const schema = z
     ),
 
     // --- Ritmo de chat ------------------------------------------------------
-    /** Quantas mensagens curtas, no maximo, por resposta. */
-    MAX_BUBBLES: intFromString(4, 1, 8),
+    /**
+     * Quantas mensagens curtas, no maximo, por resposta.
+     *
+     * Tres e nao quatro: quatro davam respostas que ocupavam o ecra todo e
+     * diziam a mesma coisa por tres maneiras. "Nao enroles tanto a conversa"
+     * resolve-se aqui tao bem como no prompt — o tecto e deterministico, a
+     * instrucao e uma sugestao.
+     */
+    MAX_BUBBLES: intFromString(3, 1, 8),
     /** Duracao do "a escrever..." antes de cada mensagem, em ms. */
     TYPING_MS_MIN: intFromString(7000, 0, 60000),
     TYPING_MS_MAX: intFromString(8000, 0, 60000),
@@ -244,19 +251,22 @@ const schema = z
      */
     DATABASE_URL: optionalString,
     /**
-     * Apagar as conversas todas e ficar so com as que vierem a seguir.
+     * Pedir uma limpeza das conversas SEM fazer deploy.
+     *
+     * Normalmente fica vazia: a limpeza pedida vem de uma constante no codigo
+     * (LIMPEZA_PEDIDA, em src/db/limpeza.ts), e corre sozinha uma vez. Esta
+     * variavel serve para pedir OUTRA limpeza depois disso, sem ter de mexer
+     * no codigo.
      *
      * Nao e um interruptor de ligar/desligar: e um valor qualquer (uma data,
-     * por exemplo). Ao arrancar, se este valor for DIFERENTE do que ficou
-     * guardado na base de dados, as conversas sao apagadas e o valor novo fica
-     * guardado. Nos arranques seguintes os dois valores ja sao iguais e nao se
-     * apaga nada.
+     * por exemplo). Ao arrancar, se for DIFERENTE do que ficou guardado na
+     * base de dados, as conversas sao apagadas e o valor novo fica guardado.
+     * Nos arranques seguintes os dois valores ja sao iguais e nao se apaga
+     * nada.
      *
      * A diferenca entre isto e um booleano e a que impede o desastre: com
      * WIPE_CONVERSATIONS=true esquecido na plataforma, CADA deploy apagava
      * tambem as conversas novas — que sao precisamente as que se quer manter.
-     *
-     * Para limpar outra vez mais tarde, poe-se um valor novo.
      */
     WIPE_TOKEN: optionalString,
 

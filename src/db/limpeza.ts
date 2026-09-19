@@ -1,21 +1,25 @@
 /**
  * Apagar as conversas todas e ficar so com as que vierem a seguir.
  *
- * Isto e uma operacao destrutiva e irreversivel: as conversas antigas nao
- * existem em mais lado nenhum. Por isso nao corre por decisao do codigo nem a
- * cada arranque — corre quando a variavel WIPE_TOKEN mudar de valor, e mais
- * nunca.
+ * Isto e destrutivo e irreversivel: as conversas antigas nao existem em mais
+ * lado nenhum. Foi pedido duas vezes, em palavras que nao deixam duvida
+ * ("apaga as conversas todas com os leads do el pedrito e deixa so as
+ * proximas"), por isso corre SOZINHO no primeiro arranque depois deste
+ * commit. Nao ha variavel para ligar nem passo para ninguem se lembrar de dar.
  *
  * COMO FUNCIONA A MARCA
- * O valor da WIPE_TOKEN fica guardado na tabela app_meta. No arranque seguinte
- * o valor da variavel e o valor guardado sao iguais, e nao se apaga nada. Esta
- * parte e a que interessa mesmo: sem ela, cada deploy do Render repetia a
+ * O token da limpeza — a constante abaixo, ou a WIPE_TOKEN se estiver definida
+ * — fica guardado na tabela app_meta depois de a limpeza correr. No arranque
+ * seguinte o token e o valor guardado sao iguais, e nao se apaga nada.
+ *
+ * Esta parte e a que interessa mesmo: sem ela, cada deploy do Render repetia a
  * limpeza e apagava as conversas NOVAS, que sao exactamente as que se queria
  * manter. O pedido era "deixa so as proximas", e "as proximas" comecam no
  * instante em que isto corre uma vez.
  *
- * Para voltar a limpar mais tarde, muda-se o valor da variavel (por exemplo
- * para a data do dia). Um valor novo, uma limpeza.
+ * Para voltar a limpar mais tarde ha dois caminhos: mudar a constante abaixo
+ * (um deploy) ou definir a WIPE_TOKEN com um valor novo (sem deploy). Um token
+ * novo, uma limpeza.
  *
  * O QUE NAO SE APAGA
  * Os leads do VIP_CHAT_IDS — quem ja depositou, ja foi aprovado a mao e ja
@@ -35,6 +39,16 @@ const log = createLogger('limpeza');
 
 /** Chave em app_meta onde fica o token da ultima limpeza feita. */
 export const CHAVE_LIMPEZA = 'conversas_limpas_token';
+
+/**
+ * A limpeza que foi pedida, identificada pela data em que foi pedida.
+ *
+ * Enquanto este valor for o que esta guardado na base de dados, nao acontece
+ * nada. Mudar esta linha e o que pede uma limpeza nova — e e por isso que ela
+ * traz a data: daqui a tres meses tem de se perceber, so de a ler, qual foi a
+ * limpeza que ja correu.
+ */
+export const LIMPEZA_PEDIDA = 'conversas-2026-09-19';
 
 export interface ResultadoLimpeza {
   /** Apagou mesmo alguma coisa nesta corrida? */
@@ -63,11 +77,12 @@ export async function jaLimpou(): Promise<boolean> {
 }
 
 /**
- * Corre a limpeza se — e so se — houver um WIPE_TOKEN novo.
+ * Corre a limpeza se — e so se — o token for diferente do que ja foi feito.
  *
- * O token e a lista de protegidos vem da configuracao; podem ser passados a
- * mao, que e como os testes conseguem exercer varias limpezas seguidas sem
- * recarregar o ambiente.
+ * O token vem da constante acima, ou da WIPE_TOKEN quando ela existe (para
+ * poder pedir-se outra limpeza sem deploy). A lista de protegidos vem da
+ * configuracao. Os dois podem ser passados a mao, que e como os testes
+ * conseguem exercer varias limpezas seguidas sem recarregar o ambiente.
  *
  * Devolve sempre um resultado; nunca lanca. Uma falha a apagar nao pode
  * impedir o bot de atender leads.
@@ -76,7 +91,7 @@ export async function limparConversas(opcoes: {
   token?: string | null;
   protegidos?: number[];
 } = {}): Promise<ResultadoLimpeza> {
-  const token = opcoes.token !== undefined ? opcoes.token : env.WIPE_TOKEN;
+  const token = opcoes.token !== undefined ? opcoes.token : (env.WIPE_TOKEN ?? LIMPEZA_PEDIDA);
 
   if (!token) return NADA_FEITO;
 

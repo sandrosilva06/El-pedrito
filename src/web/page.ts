@@ -124,6 +124,12 @@ export const ADMIN_HTML = String.raw`<!doctype html>
     display: block; max-width: 100%; border-radius: 10px; cursor: pointer;
     background: var(--linha); min-height: 60px;
   }
+  /* O video partilha o aspecto da imagem, mas sem o cursor de ampliar: quem
+     manda no clique e o leitor, que tem controlos proprios. */
+  .bolha video {
+    display: block; max-width: 100%; border-radius: 10px;
+    background: var(--linha); min-height: 60px;
+  }
   .bolha .legenda { margin-top: 6px; }
 
   /* Pre-visualizacao antes de enviar */
@@ -420,7 +426,11 @@ async function actualizarConversa(irAoFundo) {
     // critério é este e não o autor, senão desapareciam do ecrã.
     if (m.role === 'user' && m.author === 'sistema' && !m.mediaFileId) return '';
 
-    if (m.content.startsWith('[')) {
+    // O "!m.mediaFileId" importa: uma mensagem COM ficheiro nunca e um
+    // marcador, mesmo que o texto dela venha entre parentesis retos (o video
+    // de apresentacao vai com "[video de apresentacao]" como legenda interna).
+    // Sem isto, o video aparecia na conversa como uma nota cinzenta.
+    if (!m.mediaFileId && m.content.startsWith('[')) {
       return '<div class="marcador">' + escapar(m.content) + '</div>';
     }
 
@@ -438,20 +448,27 @@ async function actualizarConversa(irAoFundo) {
     const meta = '<div class="meta"><span>' + quando(m.createdAt) + '</span>' +
       (autor ? '<span>' + autor + '</span>' : '') + '</div>';
 
-    // Mensagem com imagem: mostra a imagem e a legenda por baixo, se houver.
-    // O src aponta para o proxy do servidor, nunca para o Telegram: o URL de
-    // ficheiro deles leva o token do bot no caminho.
+    // Mensagem com ficheiro: mostra o ficheiro e a legenda por baixo, se
+    // houver. O src aponta para o proxy do servidor, nunca para o Telegram: o
+    // URL de ficheiro deles leva o token do bot no caminho.
     if (m.mediaFileId) {
-      const legenda = partes.length
-        ? '<div class="legenda">' + escapar(partes.join('\n\n')) + '</div>'
+      const fonte = '/api' + prefixo + '/media/' + encodeURIComponent(m.mediaFileId);
+
+      // Legenda interna (a do video de apresentacao) nao se mostra: e para o
+      // historico saber o que aconteceu, nao para ser lida como texto enviado.
+      const visiveis = partes.filter((p) => !p.startsWith('['));
+      const legenda = visiveis.length
+        ? '<div class="legenda">' + escapar(visiveis.join('\n\n')) + '</div>'
         : '';
-      return (
-        '<div class="bolha ' + classe + '">' +
-          '<img loading="lazy" alt="imagem" src="/api' + prefixo + '/media/' +
-            encodeURIComponent(m.mediaFileId) + '" onclick="ampliar(this.src)">' +
-          legenda + meta +
-        '</div>'
-      );
+
+      // Um video num <img> e um quadrado partido. A etiqueta certa vem do
+      // media_kind, que e gravado no momento do envio.
+      const corpo =
+        m.mediaKind === 'video'
+          ? '<video controls preload="metadata" src="' + fonte + '"></video>'
+          : '<img loading="lazy" alt="imagem" src="' + fonte + '" onclick="ampliar(this.src)">';
+
+      return '<div class="bolha ' + classe + '">' + corpo + legenda + meta + '</div>';
     }
 
     return partes.map((parte, i) => {

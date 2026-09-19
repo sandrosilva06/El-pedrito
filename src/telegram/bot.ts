@@ -29,6 +29,7 @@ import { sanitiseDashes } from '../utils/text';
 import { detectCanton } from '../utils/canton';
 import { detectBettingExperience } from '../utils/experience';
 import { nextOccurrenceUtc } from '../utils/timezone';
+import { enviarVideoApresentacao } from './video';
 
 const log = createLogger('telegram');
 
@@ -349,18 +350,27 @@ bot.command('start', async (ctx) => {
   // ele saber sequer o que isto e. Agora a primeira coisa que ele le e porque
   // e que o grupo existe e o que tem andado a acontecer la dentro; a unica
   // pergunta e a que interessa, se quer entrar.
+  // Tres blocos e nao quatro, que e o tecto do MAX_BUBBLES: com quatro, os dois
+  // ultimos vinham colados na mesma mensagem e a pergunta perdia o destaque de
+  // estar sozinha.
   const name = lead.firstName ? ` ${lead.firstName}` : '';
   const greeting =
     `Olá${name}, tudo bem? Sou o ${env.AGENT_NAME}, do grupo ${env.GROUP_NAME}.\n\n` +
     `Criei este grupo para ${env.TARGET_AUDIENCE} terem uma comunidade no mercado ` +
     'das apostas desportivas, em vez de andar cada um por si. Tem sido green ' +
-    'atrás de green por aqui.\n\n' +
-    `São à volta de ${env.TIPS_PER_DAY} entradas por dia, já prontas, não tens de ` +
-    'estudar jogos nenhuns.\n\n' +
+    `atrás de green por aqui, com umas ${env.TIPS_PER_DAY} entradas por dia já ` +
+    'prontas.\n\n' +
     'Queres entrar?';
 
   await addMessage({ chatId: lead.chatId, role: 'assistant', content: greeting });
-  dispatchMessage(ctx, lead.chatId, greeting);
+
+  // O video vai a seguir as bolhas da saudacao, e nao antes: primeiro sabe-se
+  // quem esta a falar e porque, depois e que se poe a cara. Ao contrario, e um
+  // video de um desconhecido a cair no chat.
+  dispatchMessage(ctx, lead.chatId, greeting, async () => {
+    if (env.FUNNEL_VIDEO_MOMENT !== 'abertura') return;
+    await enviarVideoApresentacao(bot.api, lead.chatId);
+  });
 });
 
 bot.command('reset', async (ctx) => {
@@ -525,7 +535,17 @@ const DOUBLE_START_WINDOW_MS = 10 * 60 * 1000;
  * Entrega uma mensagem ja escrita, ao ritmo humano e sem prender o pedido
  * HTTP. Passa pela fila do chat para nao se cruzar com um turno em curso.
  */
-function dispatchMessage(ctx: Context, chatId: number, text: string): void {
+function dispatchMessage(
+  ctx: Context,
+  chatId: number,
+  text: string,
+  /**
+   * Corre depois de a ultima bolha sair, ainda DENTRO da fila do chat. E o que
+   * garante que um anexo vai a seguir ao texto e nao a meio dele: fora da
+   * fila, o video chegava enquanto o lead ainda estava a receber a saudacao.
+   */
+  aposEntregar?: () => Promise<void>,
+): void {
   const generation = currentGeneration(chatId);
 
   void enqueue(chatId, async () => {
@@ -535,6 +555,10 @@ function dispatchMessage(ctx: Context, chatId: number, text: string): void {
     }
 
     await sendHumanPaced(ctx, text, () => currentGeneration(chatId) !== generation);
+
+    if (aposEntregar && currentGeneration(chatId) === generation) {
+      await aposEntregar();
+    }
   }).catch((error: unknown) => {
     log.error(`falha ao entregar mensagem ao chat ${chatId}`, error);
   });
@@ -656,6 +680,17 @@ async function runFunnelTurn(
 
       stopTyping();
       await sendHumanPaced(ctx, answer, () => currentGeneration(chatId) !== generation);
+
+      // O video, quando o lugar dele e "interesse": so a quem ja respondeu
+      // alguma coisa, e uma unica vez. Vai depois da resposta, nunca no lugar
+      // dela.
+      if (
+        env.FUNNEL_VIDEO_MOMENT === 'interesse' &&
+        !current.videoSent &&
+        currentGeneration(chatId) === generation
+      ) {
+        await enviarVideoApresentacao(bot.api, chatId);
+      }
 
       log.info(`respondido chat=${chatId} estagio=${directive.stage}`);
     } finally {

@@ -287,6 +287,11 @@ const DDL: Record<'sqlite' | 'postgres', string[]> = {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (slot, run_date, audience)
     )`,
+    `CREATE TABLE IF NOT EXISTS app_meta (
+      chave      TEXT PRIMARY KEY,
+      valor      TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
   ],
   postgres: [
     `CREATE TABLE IF NOT EXISTS leads (
@@ -330,6 +335,11 @@ const DDL: Record<'sqlite' | 'postgres', string[]> = {
       sent       INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
       PRIMARY KEY (slot, run_date, audience)
+    )`,
+    `CREATE TABLE IF NOT EXISTS app_meta (
+      chave      TEXT PRIMARY KEY,
+      valor      TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     )`,
   ],
 };
@@ -1013,6 +1023,78 @@ export async function forgetLead(chatId: number): Promise<void> {
     await conn().run(SQL.deleteMessages, [chatId]);
     await conn().run(SQL.deleteLead, [chatId]);
   });
+}
+
+/**
+ * Notas da propria aplicacao sobre si mesma.
+ *
+ * Servem para registar coisas que so podem acontecer UMA vez, como a limpeza
+ * das conversas: sem uma marca guardada ao lado dos dados, uma operacao dessas
+ * repetia-se a cada arranque e apagava tambem as conversas novas.
+ */
+export async function lerMeta(chave: string): Promise<string | null> {
+  const row = asRow<{ valor: string }>(
+    await conn().get('SELECT valor FROM app_meta WHERE chave = ?', [chave]),
+  );
+
+  return row?.valor ?? null;
+}
+
+/**
+ * Apaga as conversas todas de uma vez, guardando os leads indicados.
+ *
+ * Quem decide SE isto corre e o modulo da limpeza; aqui so se executa, porque
+ * e este o unico ficheiro que fala com a base de dados. As mensagens vao todas,
+ * incluindo as dos leads guardados: o que se guarda e o lead, nao a conversa.
+ *
+ * Devolve o que foi apagado, para o arranque o poder dizer em voz alta. Uma
+ * operacao destas nao pode acontecer em silencio.
+ */
+export async function apagarConversas(
+  protegidos: number[],
+): Promise<{ leadsApagados: number; mensagensApagadas: number; leadsMantidos: number }> {
+  // Sao chat_id, ja validados como inteiros pelo env: nao ha texto de fora a
+  // entrar no SQL. Uma lista literal evita uma tabela temporaria so para isto.
+  const filtro =
+    protegidos.length > 0
+      ? ` WHERE chat_id NOT IN (${protegidos.map((id) => String(Math.trunc(id))).join(', ')})`
+      : '';
+
+  const antesLeads = Number(
+    asRow<{ total: number }>(await conn().get('SELECT COUNT(*) AS total FROM leads'))?.total ?? 0,
+  );
+  const antesMensagens = Number(
+    asRow<{ total: number }>(await conn().get('SELECT COUNT(*) AS total FROM messages'))?.total ?? 0,
+  );
+
+  await inTransaction(async (tx) => {
+    await tx.run('DELETE FROM messages');
+    await tx.run(`DELETE FROM deposit_proofs${filtro}`);
+    await tx.run(`DELETE FROM leads${filtro}`);
+
+    // O estado do remarketing deixa de fazer sentido: os leads a que dizia
+    // respeito ja nao existem, e contadores de toques herdados calavam o bot
+    // com quem chegasse a seguir.
+    await tx.run('DELETE FROM remarketing_runs');
+  });
+
+  const mantidos = Number(
+    asRow<{ total: number }>(await conn().get('SELECT COUNT(*) AS total FROM leads'))?.total ?? 0,
+  );
+
+  return {
+    leadsApagados: antesLeads - mantidos,
+    mensagensApagadas: antesMensagens,
+    leadsMantidos: mantidos,
+  };
+}
+
+export async function gravarMeta(chave: string, valor: string): Promise<void> {
+  await conn().run(
+    `INSERT INTO app_meta (chave, valor) VALUES (?, ?)
+     ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor, updated_at = datetime('now')`,
+    [chave, valor],
+  );
 }
 
 /**

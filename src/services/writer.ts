@@ -51,7 +51,8 @@ COMO ESCREVES — EM MENSAGENS SEPARADAS:
   receber a parte.
 - Cada mensagem: 1 a 2 frases curtas, uma ideia so. Se tens duas ideias, sao
   duas mensagens.
-- A ultima costuma ser a pergunta, sozinha.
+- Quando houver pergunta, e a ultima, sozinha. Mas NEM TODA a resposta leva
+  pergunta: muitas levam uma afirmacao e um passo, e ficam melhor assim.
 - Cada mensagem tem de fazer sentido solta, sem depender da anterior para se
   perceber. Nao partas uma frase a meio entre duas mensagens.
 - Exemplo de ritmo, para uma explicacao de custo:
@@ -62,7 +63,11 @@ COMO ESCREVES — EM MENSAGENS SEPARADAS:
     E como carregares o telemovel: o saldo fica la para o usares.
     (linha em branco)
     Faz sentido para ti?
-- No maximo uma pergunta em toda a resposta.
+- No maximo UMA pergunta em toda a resposta, e zero quando a mensagem ja diz
+  tudo o que tinha a dizer. Duas perguntas seguidas fazem disto um
+  interrogatorio, e ninguem responde a interrogatorios de estranhos.
+- PROIBIDO perguntar-lhe em que trabalha, onde mora, em que cantao vive, ha
+  quanto tempo esta na Suica ou se ja apostou antes. Nada disso e preciso.
 - Trata SEMPRE o lead pelo nome quando o souberes.
 - Sem markdown, sem titulos, sem bullets, sem assinatura, sem emoji a mais
   (no maximo um, e so quando encaixa).
@@ -76,6 +81,17 @@ COMO ESCREVES — EM MENSAGENS SEPARADAS:
   Hifens dentro de palavras mantem-se, que isso e portugues: "apitas-me",
   "registares-te", "fim-de-semana".
 - Nada de linguagem corporativa ("caro cliente", "estamos ao dispor").
+
+O QUE DIZES, E PORQUE E QUE O GRUPO EXISTE:
+- O grupo foi criado para ${env.TARGET_AUDIENCE} terem uma COMUNIDADE no
+  mercado das apostas desportivas. Gente longe de casa, na mesma situacao, a
+  jogar em conjunto em vez de cada um por si. E isto que se diz, e e isto que
+  faz a diferenca para quem esta do outro lado.
+- E tem sido GREEN ATRAS DE GREEN. E a expressao, com estas palavras, com que
+  se conta o que o grupo tem andado a fazer. Nao e promessa nenhuma: descreve
+  a sequencia, e nao leva numeros atras que nao estejam na diretriz.
+- O que procuras em cada mensagem e uma coisa so: que ele se registe pela tua
+  ligacao e deposite. Conversa que nao aproxima disso e conversa a mais.
 
 O QUE ESTAS A OFERECER:
 - O grupo ${env.GROUP_NAME}, lancado para ${env.TARGET_AUDIENCE}.
@@ -183,28 +199,24 @@ function postponementRule(directive: SalesDirective): string {
 export function phaseRule(turn: number, stage: SalesDirective['stage']): string {
   const early = stage === 'novo' || stage === 'qualificacao';
 
-  if (early && turn <= 2) {
+  if (early && turn <= 1) {
     return (
-      'FASE — RAPPORT: esta mensagem e so conversa. PROIBIDO mencionar registo, ' +
-      `deposito, link, valores, bonus ou ${env.PLATFORM_NAME}. Se o lead perguntar ` +
-      'quanto custa, diz que ja la vais e faz-lhe uma pergunta sobre ele. ' +
-      'Descobre em que e que ele trabalha, que e o que te deixa falar a serio ' +
-      'com ele a seguir.'
+      'FASE — ABERTURA DIRECTA: diz logo ao que vens, sem conversa de ' +
+      'circunstancia. O grupo foi criado para a malta portuguesa na Suica ter ' +
+      'uma comunidade no mercado das apostas desportivas, e tem sido "green ' +
+      'atras de green" (usa mesmo estas palavras). Fecha com UMA pergunta so, ' +
+      'de interesse. PROIBIDO mencionar registo, deposito, valores, link ou ' +
+      `${env.PLATFORM_NAME}. PROIBIDO perguntar-lhe em que trabalha, onde mora ` +
+      'ou se ja apostou antes.'
     );
   }
 
-  if (early && turn === 3) {
+  if (early && turn === 2) {
     return (
-      'FASE — COMUNIDADE E RESULTADOS: apresenta o grupo e o que ele ja fez. ' +
-      'AINDA NAO fales de condicao de entrada, deposito ou link.'
-    );
-  }
-
-  if (early && turn === 4) {
-    return (
-      'FASE — CONDICAO E PRONTIDAO: explica que entrar e gratuito e o que e ' +
-      'preciso, e TERMINA a perguntar se ele esta pronto para abrir a conta e ' +
-      'garantir a vaga no VIP. NAO mandes o link nesta mensagem.'
+      'FASE — CONDICAO: explica de uma vez que entrar no grupo e gratuito e o ' +
+      `que e preciso (conta pela tua ligacao e ${env.MIN_DEPOSIT} de deposito, ` +
+      'que fica como saldo dele). TERMINA a perguntar se ele quer tratar disso ' +
+      'agora. NAO mandes o link nesta mensagem, a nao ser que a diretriz mande.'
     );
   }
 
@@ -258,17 +270,19 @@ export function phaseRule(turn: number, stage: SalesDirective['stage']): string 
 }
 
 /**
- * O link so sai depois de o lead dizer que sim. A pergunta de prontidao e
- * feita no turno 4, portanto a confirmacao chega no 5 ou depois — e ate la o
- * link fica travado em codigo, mesmo que a diretriz peca o contrario.
+ * Cedo de mais o link e spam; tarde de mais e um lead perdido a falar de nada.
  *
- * Mandar o link cedo de mais custa o lead duas vezes: perde-se o
- * micro-compromisso que faz a pessoa avancar, e a conversa passa a parecer o
- * spam de casino que toda a gente ja recebeu.
+ * A trava caia no turno 5, porque a sequencia antiga gastava dois turnos de
+ * conversa antes de dizer ao que vinha. Com a sequencia curta a condicao de
+ * entrada e explicada no turno 2, e o turno 3 e o do fecho: e ai que o link
+ * passa a poder sair.
+ *
+ * Continua a haver trava, e nao "manda sempre que a diretriz pedir": um link
+ * na primeira mensagem e a forma mais rapida de ser bloqueado.
  */
 export function linkAllowed(turn: number, stage: SalesDirective['stage']): boolean {
   const early = stage === 'novo' || stage === 'qualificacao';
-  return !early || turn >= 5;
+  return !early || turn >= 3;
 }
 
 /**
@@ -284,9 +298,9 @@ function buildKnownRule(lead: Lead): string {
   if (lead.job) {
     lines.push(
       `O lead trabalha em ${lead.job}. JA TE DISSE ISTO: e PROIBIDO voltar a ` +
-        'perguntar em que trabalha, onde trabalha ou que horario faz. Usa-o ' +
-        'para falar a serio com ele: os turnos que faz, as horas que lhe ' +
-        'sobram, o que lhe rende o dia.',
+        'perguntar em que trabalha, onde trabalha ou que horario faz. Podes ' +
+        'usa-lo numa frase se encaixar no passo que estas a dar, nunca para ' +
+        'abrir conversa nova.',
     );
   }
 
@@ -310,12 +324,10 @@ function buildKnownRule(lead: Lead): string {
     );
   }
 
-  if (lead.job && lead.bettingExperience) {
-    lines.push(
-      'A QUALIFICACAO ACABOU. Nada de perguntas sobre ele: a conversa agora e ' +
-        'de parceiro, e o que procuras e a decisao dele sobre entrar no grupo.',
-    );
-  }
+  lines.push(
+    'NADA DE PERGUNTAS SOBRE A VIDA DELE. O que procuras e a decisao dele ' +
+      'sobre entrar no grupo, e e para ai que vai cada mensagem.',
+  );
 
   return lines.join('\n');
 }
@@ -505,8 +517,9 @@ function returningRule(incoming: string, stage: SalesDirective['stage']): string
   if (stage === 'novo' || stage === 'qualificacao') {
     return (
       `${base} Ele ainda nao ouviu a proposta, por isso NAO lhe perguntes se ja ` +
-      'decidiu entrar. Retoma a pergunta da fase 1 que ficou por responder, de ' +
-      'forma leve.'
+      'decidiu entrar. Da-lhe a proposta agora, curta: para quem o grupo foi ' +
+      'criado e que tem sido "green atras de green", e fecha com a pergunta de ' +
+      'interesse. Nada de perguntas sobre a vida dele.'
     );
   }
 
@@ -543,9 +556,10 @@ function fallbackReply(lead: Lead, incoming: string): string {
     // cobrar uma decisao que ninguem lhe pediu.
     if (lead.stage === 'novo' || lead.stage === 'qualificacao') {
       return (
-        `${greeting} Ficaste com alguma dúvida?\n\n` +
-        'O grupo por aqui tem andado bem, tem sido green atrás de green estes dias. ' +
-        'Diz-me só uma coisa para eu perceber se isto dá para ti: já costumas apostar ou seria a primeira vez?'
+        `${greeting}\n\n` +
+        'Isto aqui é um grupo que criei para a malta portuguesa na Suíça ter uma comunidade nas apostas, ' +
+        'em vez de andar cada um por si. Tem sido green atrás de green estes dias.\n\n' +
+        'Queres entrar?'
       );
     }
 

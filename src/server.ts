@@ -13,6 +13,7 @@ import {
   restoreVipLeads,
 } from './db/database';
 import { backupDatabase } from './db/backup';
+import { jaLimpou, limparConversas } from './db/limpeza';
 import { preencherNomes } from './telegram/identidades';
 import { LEADS_RECUPERADOS } from './db/leads-recuperados';
 import { startRemarketingScheduler, stopRemarketingScheduler } from './scheduler/remarketing';
@@ -165,6 +166,20 @@ async function start(): Promise<void> {
   // ja esta a ouvir para o Render nao derrubar o servico enquanto isto demora.
   await initDatabase();
 
+  // A limpeza vem LOGO a seguir a base de dados abrir, e antes de qualquer
+  // reposicao: apagar primeiro e repor depois inverteria o pedido.
+  const limpeza = await limparConversas();
+  if (limpeza.executada) {
+    log.warn(
+      `conversas apagadas a pedido: ${limpeza.leadsApagados} lead(s) e ` +
+        `${limpeza.mensagensApagadas} mensagem(ns). A partir daqui a caixa de ` +
+        `entrada so mostra conversas novas` +
+        (limpeza.leadsMantidos > 0
+          ? `, com ${limpeza.leadsMantidos} lead(s) do VIP_CHAT_IDS guardados.`
+          : '.'),
+    );
+  }
+
   // A tabela de updates processados existe para nao repetir entregas, nao para
   // guardar historia. Podada no arranque e uma vez por hora.
   await pruneProcessedUpdates();
@@ -199,7 +214,17 @@ async function start(): Promise<void> {
   // Leads que os deploys apagaram, reconstruidos a partir dos logs. E
   // idempotente: passado o primeiro arranque, isto so confirma o que ja la
   // esta e nao mexe em nada.
-  if (env.RECOVER_LEADS) {
+  //
+  // Depois de uma limpeza pedida a mao, isto fica desligado para sempre nesta
+  // base de dados: repor conversas antigas seria desfazer o que se acabou de
+  // pedir.
+  const limpouAlgumaVez = await jaLimpou();
+
+  if (env.RECOVER_LEADS && limpouAlgumaVez) {
+    log.info('recuperacao dos leads dos logs desligada: as conversas foram apagadas a pedido');
+  }
+
+  if (env.RECOVER_LEADS && !limpouAlgumaVez) {
     const { criados, existentes } = await restoreLeads(LEADS_RECUPERADOS);
     if (criados > 0) {
       log.info(`recuperacao: ${criados} lead(s) repostos dos logs (${existentes} ja existiam)`);

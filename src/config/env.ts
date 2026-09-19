@@ -243,6 +243,22 @@ const schema = z
      * postgresql://utilizador:palavra@servidor:5432/base
      */
     DATABASE_URL: optionalString,
+    /**
+     * Apagar as conversas todas e ficar so com as que vierem a seguir.
+     *
+     * Nao e um interruptor de ligar/desligar: e um valor qualquer (uma data,
+     * por exemplo). Ao arrancar, se este valor for DIFERENTE do que ficou
+     * guardado na base de dados, as conversas sao apagadas e o valor novo fica
+     * guardado. Nos arranques seguintes os dois valores ja sao iguais e nao se
+     * apaga nada.
+     *
+     * A diferenca entre isto e um booleano e a que impede o desastre: com
+     * WIPE_CONVERSATIONS=true esquecido na plataforma, CADA deploy apagava
+     * tambem as conversas novas — que sao precisamente as que se quer manter.
+     *
+     * Para limpar outra vez mais tarde, poe-se um valor novo.
+     */
+    WIPE_TOKEN: optionalString,
 
     // --- Caixa de entrada -------------------------------------------------
     /**

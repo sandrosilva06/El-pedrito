@@ -136,12 +136,11 @@ const schema = z
     /**
      * Quantas mensagens curtas, no maximo, por resposta.
      *
-     * Tres e nao quatro: quatro davam respostas que ocupavam o ecra todo e
-     * diziam a mesma coisa por tres maneiras. "Nao enroles tanto a conversa"
-     * resolve-se aqui tao bem como no prompt — o tecto e deterministico, a
-     * instrucao e uma sugestao.
+     * Quatro, que e o que o funil da qualificacao precisa: os turnos que
+     * apresentam a comunidade e explicam a condicao de entrada nao cabem em
+     * tres sem ficarem colados dois a dois.
      */
-    MAX_BUBBLES: intFromString(3, 1, 8),
+    MAX_BUBBLES: intFromString(4, 1, 8),
     /** Duracao do "a escrever..." antes de cada mensagem, em ms. */
     TYPING_MS_MIN: intFromString(7000, 0, 60000),
     TYPING_MS_MAX: intFromString(8000, 0, 60000),

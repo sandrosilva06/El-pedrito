@@ -341,26 +341,15 @@ bot.command('start', async (ctx) => {
     return;
   }
 
-  log.info(`/start de lead novo chat=${lead.chatId} — abertura directa`);
+  log.info(`/start de lead novo chat=${lead.chatId} — inicia a fase 1`);
 
   await advanceStage(lead.chatId, 'qualificacao');
 
-  // A abertura diz logo ao que vem. A versao anterior comecava por perguntar
-  // ao lead se ja costumava apostar: uma pergunta a um desconhecido, antes de
-  // ele saber sequer o que isto e. Agora a primeira coisa que ele le e porque
-  // e que o grupo existe e o que tem andado a acontecer la dentro; a unica
-  // pergunta e a que interessa, se quer entrar.
-  // Tres blocos e nao quatro, que e o tecto do MAX_BUBBLES: com quatro, os dois
-  // ultimos vinham colados na mesma mensagem e a pergunta perdia o destaque de
-  // estar sozinha.
   const name = lead.firstName ? ` ${lead.firstName}` : '';
   const greeting =
     `Olá${name}, tudo bem? Sou o ${env.AGENT_NAME}, do grupo ${env.GROUP_NAME}.\n\n` +
-    `Criei este grupo para ${env.TARGET_AUDIENCE} terem uma comunidade no mercado ` +
-    'das apostas desportivas, em vez de andar cada um por si. Tem sido green ' +
-    `atrás de green por aqui, com umas ${env.TIPS_PER_DAY} entradas por dia já ` +
-    'prontas.\n\n' +
-    'Queres entrar?';
+    `Este grupo foi lançado para ${env.TARGET_AUDIENCE}. Diz-me só uma coisa: ` +
+    'já costumas acompanhar apostas desportivas ou seria a primeira vez?';
 
   await addMessage({ chatId: lead.chatId, role: 'assistant', content: greeting });
 
@@ -472,8 +461,7 @@ async function recordJob(chatId: number, known: string | null, directive: SalesD
 /**
  * Guarda se o lead ja aposta ou esta a comecar, pelas mesmas razoes do cantao:
  * e o campo guardado, e nao a memoria do modelo, que trava a repeticao da
- * pergunta. O funil ja nao pergunta isto — mas se ele o disser por iniciativa
- * dele, fica gravado, e e o que garante que ninguem lho pergunta depois.
+ * pergunta na fase 2.
  *
  * A escrita e ignorada se ja houver resposta: a primeira e a boa.
  */

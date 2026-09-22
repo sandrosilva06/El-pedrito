@@ -269,24 +269,6 @@ const schema = z
      */
     WIPE_TOKEN: optionalString,
 
-    // --- Video de apresentacao ---------------------------------------------
-    /**
-     * Onde e que o video entra no funil.
-     *
-     * - "abertura"  — a seguir a mensagem de /start. E a cara de quem fala com
-     *   ele, logo no inicio, antes de se formar a suspeita do costume.
-     * - "interesse" — no primeiro turno em que o lead ja respondeu alguma
-     *   coisa. Chega a menos gente, mas so a quem se deu ao trabalho de
-     *   escrever.
-     * - "desligado" — nao sai video nenhum.
-     *
-     * Sai UMA vez por lead, em qualquer dos casos (coluna leads.video_sent).
-     */
-    FUNNEL_VIDEO_MOMENT: z
-      .enum(['abertura', 'interesse', 'desligado'])
-      .default('abertura'),
-    /** Legenda do video. Vazia = vai sem legenda, que e o que parece natural. */
-    FUNNEL_VIDEO_CAPTION: optionalString.transform((value) => value ?? ''),
 
     // --- Caixa de entrada -------------------------------------------------
     /**

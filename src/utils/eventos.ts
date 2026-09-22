@@ -26,8 +26,6 @@ export interface EventoMensagem {
   author: 'bot' | 'humano' | 'sistema';
   content: string;
   mediaFileId: string | null;
-  /** "photo" ou "video": decide a etiqueta com que a bolha e desenhada. */
-  mediaKind: string | null;
   createdAt: string;
   /** Nota interna para a IA: nao e conversa e nao se mostra. */
   interna: boolean;

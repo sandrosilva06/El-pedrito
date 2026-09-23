@@ -218,6 +218,63 @@ export function createInboxRouter(): Router {
   router.use(requireAuth);
 
   /**
+   * Login da conta de utilizador, a partir da pagina.
+   *
+   * Fica ATRAS do requireAuth, e isso nao e detalhe: quem chegasse a estas
+   * rotas sem credencial podia pedir codigos de login para qualquer numero,
+   * usando o servico como maquina de incomodar gente.
+   *
+   * A sessao que sai daqui vale tanto como a conta. Vai UMA vez para o browser
+   * de quem fez o login, e nunca para o log.
+   */
+  router.post('/userbot/telefone', async (req, res) => {
+    const telefone = String((req.body as { telefone?: string }).telefone ?? '').trim();
+
+    try {
+      const { pedirCodigo } = await import('../telegram/userbot-login');
+      res.json(await pedirCodigo(telefone));
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post('/userbot/codigo', async (req, res) => {
+    const codigo = String((req.body as { codigo?: string }).codigo ?? '').trim();
+
+    try {
+      const { confirmarCodigo } = await import('../telegram/userbot-login');
+      res.json(await confirmarCodigo(codigo));
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post('/userbot/password', async (req, res) => {
+    const password = String((req.body as { password?: string }).password ?? '');
+
+    try {
+      const { confirmarPassword } = await import('../telegram/userbot-login');
+      res.json(await confirmarPassword(password));
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  /** Em que pe esta a conta, para a pagina saber o que mostrar. */
+  router.get('/userbot/estado', async (_req, res) => {
+    const { sessaoGuardada } = await import('../telegram/userbot-login');
+    const { temUserbot } = await import('../telegram/canal');
+
+    res.json({
+      // Nunca a sessao em si: so se existe.
+      temSessao: (await sessaoGuardada()).length > 0,
+      ligado: temUserbot(),
+      activo: env.USERBOT_ENABLED,
+      temCredenciais: Boolean(env.TELEGRAM_API_ID && env.TELEGRAM_API_HASH),
+    });
+  });
+
+  /**
    * Fluxo em tempo real, por Server-Sent Events.
    *
    * Cada separador aberto da caixa mantem esta ligacao. Quando chega uma

@@ -85,14 +85,18 @@ export function userbotCliente(): any {
   return cliente;
 }
 
-/** O que o userbot precisa para sequer tentar arrancar. */
-export function userbotConfigurado(): boolean {
-  return (
-    env.USERBOT_ENABLED &&
-    env.TELEGRAM_API_ID > 0 &&
-    Boolean(env.TELEGRAM_API_HASH) &&
-    Boolean(env.USERBOT_SESSION)
-  );
+/**
+ * O que o userbot precisa para sequer tentar arrancar.
+ *
+ * A sessao pode vir da variavel de ambiente ou do login feito pela pagina —
+ * por isso isto e assincrono, e nao uma leitura de configuracao.
+ */
+export async function userbotConfigurado(): Promise<boolean> {
+  if (!env.USERBOT_ENABLED) return false;
+  if (!env.TELEGRAM_API_ID || !env.TELEGRAM_API_HASH) return false;
+
+  const { sessaoGuardada } = await import('./userbot-login');
+  return (await sessaoGuardada()).length > 0;
 }
 
 /** Canal de saida pela conta. */
@@ -240,11 +244,11 @@ export async function iniciarUserbot(params: {
 }): Promise<boolean> {
   if (!env.USERBOT_ENABLED) return false;
 
-  if (!userbotConfigurado()) {
+  if (!(await userbotConfigurado())) {
     log.warn(
-      'USERBOT_ENABLED esta ligado mas falta configuracao ' +
-        '(TELEGRAM_API_ID, TELEGRAM_API_HASH, USERBOT_SESSION). ' +
-        'Corre `npx tsx src/scripts/login-userbot.ts` para obter a sessao.',
+      'USERBOT_ENABLED esta ligado mas ainda nao ha sessao. ' +
+        'Entra em /admin e faz o login da conta por la, ou define ' +
+        'TELEGRAM_API_ID, TELEGRAM_API_HASH e USERBOT_SESSION.',
     );
     return false;
   }
@@ -254,8 +258,10 @@ export async function iniciarUserbot(params: {
     const { StringSession } = await import('teleproto/sessions');
     const { NewMessage } = await import('teleproto/events');
 
+    const { sessaoGuardada } = await import('./userbot-login');
+
     cliente = new TelegramClient(
-      new StringSession(env.USERBOT_SESSION),
+      new StringSession(await sessaoGuardada()),
       env.TELEGRAM_API_ID,
       env.TELEGRAM_API_HASH,
       { connectionRetries: 5, autoReconnect: true },

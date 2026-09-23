@@ -126,6 +126,17 @@ export const ADMIN_HTML = String.raw`<!doctype html>
   }
   .bolha .legenda { margin-top: 6px; }
 
+  /* --- ecra da conta --- */
+  .painel-conta { padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    max-width: 520px; width: 100%; margin: 0 auto; }
+  .painel-conta label { font-size: 13px; color: var(--fraco); font-weight: 600; }
+  .painel-conta .nota { font-size: 13px; color: var(--fraco); margin: 0; line-height: 1.5; }
+  .painel-conta .nota.erro { color: #e88; }
+  .painel-conta .nota.aviso { color: #e8c86a; }
+  .painel-conta textarea { font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+    word-break: break-all; }
+  .painel-conta > div { display: flex; flex-direction: column; gap: 8px; }
+
   /* Pre-visualizacao antes de enviar */
   #previa {
     position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.92);
@@ -199,6 +210,7 @@ export const ADMIN_HTML = String.raw`<!doctype html>
 <section id="lista" class="ecra">
   <div class="barra">
     <div class="titulo">Conversas <span id="contagem" class="sub"></span></div>
+    <button class="icone" id="ir-conta" title="Conta do El Pedrito">☰</button>
     <button class="icone" id="sair" title="Sair">⎋</button>
   </div>
   <div class="filtros">
@@ -206,6 +218,51 @@ export const ADMIN_HTML = String.raw`<!doctype html>
     <input type="search" id="procurar" placeholder="Procurar por nome">
   </div>
   <div class="conversas" id="conversas"></div>
+</section>
+
+<section id="conta" class="ecra">
+  <div class="barra">
+    <button class="icone" id="conta-voltar">&lsaquo;</button>
+    <div class="titulo">Conta do El Pedrito</div>
+  </div>
+  <div class="painel-conta">
+    <p class="nota" id="conta-estado"></p>
+
+    <div id="conta-passo-telefone">
+      <label>Numero de telemovel da conta</label>
+      <input type="tel" id="conta-telefone" placeholder="+41 76 123 45 67" autocomplete="off">
+      <p class="nota">Com indicativo do pais. E a conta que fala com os leads, nao a tua pessoal.</p>
+      <button class="botao" id="conta-pedir">Enviar codigo</button>
+    </div>
+
+    <div id="conta-passo-codigo" hidden>
+      <label>Codigo que o Telegram enviou</label>
+      <input type="text" id="conta-codigo" inputmode="numeric" placeholder="12345" autocomplete="off">
+      <p class="nota" id="conta-onde"></p>
+      <button class="botao" id="conta-confirmar">Confirmar</button>
+    </div>
+
+    <div id="conta-passo-password" hidden>
+      <label>Palavra-passe da verificacao em dois passos</label>
+      <input type="password" id="conta-password" autocomplete="off">
+      <button class="botao" id="conta-confirmar-password">Entrar</button>
+    </div>
+
+    <div id="conta-feito" hidden>
+      <p class="nota" id="conta-quem"></p>
+      <label>USERBOT_SESSION</label>
+      <textarea id="conta-sessao" readonly rows="4"></textarea>
+      <button class="botao discreto" id="conta-copiar">Copiar</button>
+      <p class="nota aviso">
+        Isto vale tanto como a conta: quem a tiver entra no Telegram como o El
+        Pedrito. Cola-a no Render (Environment) como <b>USERBOT_SESSION</b> e nao
+        a mostres a ninguem. Ja esta guardada e a funcionar, mas sem a variavel
+        perde-se no proximo deploy.
+      </p>
+    </div>
+
+    <p class="nota erro" id="conta-erro" hidden></p>
+  </div>
 </section>
 
 <section id="conversa" class="ecra">
@@ -325,6 +382,126 @@ $('form-login').addEventListener('submit', async (e) => {
 $('sair').addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
   mostrar('login');
+});
+
+// --- conta do El Pedrito (login da sessao de utilizador) ---
+function passoConta(qual) {
+  for (const p of ['telefone', 'codigo', 'password']) {
+    $('conta-passo-' + p).hidden = p !== qual;
+  }
+  $('conta-feito').hidden = qual !== 'feito';
+  $('conta-erro').hidden = true;
+}
+
+function erroConta(mensagem) {
+  $('conta-erro').textContent = mensagem;
+  $('conta-erro').hidden = false;
+}
+
+$('ir-conta').addEventListener('click', async () => {
+  mostrar('conta');
+  passoConta('telefone');
+
+  try {
+    const e = await api('/userbot/estado');
+
+    if (!e.temCredenciais) {
+      $('conta-estado').textContent =
+        'Faltam o TELEGRAM_API_ID e o TELEGRAM_API_HASH nas variaveis do servico. ' +
+        'Sem eles nao da para entrar na conta.';
+      passoConta('nenhum');
+      return;
+    }
+
+    $('conta-estado').textContent = e.ligado
+      ? 'A conta esta ligada e a atender. So precisas de voltar aqui se a sessao se perder.'
+      : e.temSessao
+        ? 'Ha uma sessao guardada, mas a conta nao esta a atender. Confirma que o USERBOT_ENABLED esta a true e faz deploy.'
+        : 'A conta ainda nao entrou. Escreve o numero para receberes o codigo no Telegram.';
+  } catch (err) {
+    erroConta(err.message);
+  }
+});
+
+$('conta-voltar').addEventListener('click', () => mostrar('lista'));
+
+$('conta-pedir').addEventListener('click', async () => {
+  $('conta-pedir').disabled = true;
+  $('conta-erro').hidden = true;
+
+  try {
+    const r = await api('/userbot/telefone', {
+      method: 'POST',
+      body: JSON.stringify({ telefone: $('conta-telefone').value }),
+    });
+
+    $('conta-onde').textContent = r.porOnde === 'app'
+      ? 'O codigo foi para a APP do Telegram, noutro dispositivo onde tenhas sessao aberta. Nao vem por SMS.'
+      : 'O codigo foi por SMS para esse numero.';
+
+    passoConta('codigo');
+    $('conta-codigo').focus();
+  } catch (err) {
+    erroConta(err.message);
+  } finally {
+    $('conta-pedir').disabled = false;
+  }
+});
+
+async function concluirConta(caminho, corpo) {
+  const r = await api(caminho, { method: 'POST', body: JSON.stringify(corpo) });
+
+  if (r.estado === 'precisa-password') {
+    passoConta('password');
+    $('conta-password').focus();
+    return;
+  }
+
+  $('conta-quem').textContent = 'Entrou como ' + r.nome + '.';
+  $('conta-sessao').value = r.sessao;
+  passoConta('feito');
+}
+
+$('conta-confirmar').addEventListener('click', async () => {
+  $('conta-confirmar').disabled = true;
+  $('conta-erro').hidden = true;
+
+  try {
+    await concluirConta('/userbot/codigo', { codigo: $('conta-codigo').value });
+  } catch (err) {
+    erroConta(err.message);
+  } finally {
+    $('conta-confirmar').disabled = false;
+  }
+});
+
+$('conta-confirmar-password').addEventListener('click', async () => {
+  $('conta-confirmar-password').disabled = true;
+  $('conta-erro').hidden = true;
+
+  try {
+    await concluirConta('/userbot/password', { password: $('conta-password').value });
+    $('conta-password').value = '';
+  } catch (err) {
+    erroConta(err.message);
+  } finally {
+    $('conta-confirmar-password').disabled = false;
+  }
+});
+
+$('conta-copiar').addEventListener('click', async () => {
+  const campo = $('conta-sessao');
+
+  try {
+    await navigator.clipboard.writeText(campo.value);
+  } catch {
+    // Sem permissao para a area de transferencia (acontece em http): selecciona
+    // o texto para a copia a mao ser um Cmd+C.
+    campo.select();
+  }
+
+  $('conta-copiar').textContent = 'Copiado';
+  setTimeout(() => { $('conta-copiar').textContent = 'Copiar'; }, 1500);
 });
 
 // --- lista ---

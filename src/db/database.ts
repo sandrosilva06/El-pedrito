@@ -75,6 +75,12 @@ export interface Lead {
    */
   pinned: boolean;
   /**
+   * Por onde e que esta conversa entra e sai: a Bot API ou a conta de
+   * utilizador. Guardado por lead, e nao global, porque a passagem de um para
+   * o outro e gradual — quem ja falava com o bot continua no bot.
+   */
+  transporte: 'bot' | 'userbot';
+  /**
    * Em que trabalha, nas palavras dele. Null enquanto nao se souber.
    *
    * Ao contrario do cantao e da experiencia, nao ha detector em codigo: uma
@@ -173,6 +179,7 @@ interface LeadRow {
   canton: string | null;
   last_name: string | null;
   pinned: number;
+  transporte: string | null;
   job: string | null;
   betting_experience: string | null;
   first_name: string | null;
@@ -370,6 +377,7 @@ const COLUNAS: Array<{ tabela: string; coluna: string; sqlite: string; postgres:
   { tabela: 'leads', coluna: 'job', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'leads', coluna: 'pinned', sqlite: 'INTEGER NOT NULL DEFAULT 0', postgres: 'INTEGER NOT NULL DEFAULT 0' },
   { tabela: 'leads', coluna: 'last_name', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'transporte', sqlite: "TEXT NOT NULL DEFAULT 'bot'", postgres: "TEXT NOT NULL DEFAULT 'bot'" },
   { tabela: 'messages', coluna: 'author', sqlite: "TEXT NOT NULL DEFAULT 'bot'", postgres: "TEXT NOT NULL DEFAULT 'bot'" },
   { tabela: 'messages', coluna: 'media_file_id', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'messages', coluna: 'media_kind', sqlite: 'TEXT', postgres: 'TEXT' },
@@ -467,6 +475,7 @@ function mapLead(row: LeadRow): Lead {
     canton: row.canton,
     lastName: row.last_name,
     pinned: row.pinned === 1,
+    transporte: row.transporte === 'userbot' ? 'userbot' : 'bot',
     job: row.job,
     bettingExperience: row.betting_experience,
     firstName: row.first_name,
@@ -635,6 +644,7 @@ const SQL = {
      WHERE chat_id = ? AND (canton IS NULL OR canton = '')
   `,
   setPinned: 'UPDATE leads SET pinned = ? WHERE chat_id = ?',
+  setTransporte: 'UPDATE leads SET transporte = ? WHERE chat_id = ?',
   setIdentity: `
     UPDATE leads
        SET first_name = coalesce(?, first_name),
@@ -1321,6 +1331,20 @@ export async function restoreVipLeads(
  */
 export async function setPinned(chatId: number, pinned: boolean): Promise<void> {
   await conn().run(SQL.setPinned, [pinned ? 1 : 0, chatId]);
+}
+
+/**
+ * Diz por onde e que esta conversa passa a entrar e sair.
+ *
+ * Escrito uma vez, quando o lead aparece pela primeira vez. Um lead que chegou
+ * pelo bot nunca muda de canal sozinho: a conversa dele esta naquele chat, e
+ * mudar o canal so faria as respostas saírem por um sitio onde ele nao esta.
+ */
+export async function setTransporte(
+  chatId: number,
+  transporte: 'bot' | 'userbot',
+): Promise<void> {
+  await conn().run(SQL.setTransporte, [transporte, chatId]);
 }
 
 /**

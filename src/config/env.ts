@@ -269,6 +269,32 @@ const schema = z
      */
     WIPE_TOKEN: optionalString,
 
+    // --- Conta de utilizador (userbot, MTProto) ----------------------------
+    /**
+     * Atender pela CONTA do El Pedrito em vez de (so) pelo bot.
+     *
+     * E o que permite o controlo silencioso: um bot da Bot API nao ve as
+     * mensagens que eu escrevo a mao na app do Telegram, e por isso continuava
+     * a responder por cima de mim. Uma sessao de conta ve tudo o que a conta
+     * faz, incluindo o que ela propria envia.
+     *
+     * Desligado por omissao. Ligar sem sessao nao arranca nada e deixa um
+     * aviso no log; o funil continua a correr pela Bot API.
+     */
+    USERBOT_ENABLED: optionalString.transform((value) => value === 'true'),
+    /** api_id e api_hash de https://my.telegram.org (Apps). */
+    TELEGRAM_API_ID: intFromString(0, 0, 2_147_483_647),
+    TELEGRAM_API_HASH: optionalString.transform((value) => value ?? ''),
+    /**
+     * A sessao, em texto, produzida uma vez por
+     * `npx tsx src/scripts/login-userbot.ts`.
+     *
+     * VALE TANTO COMO A CONTA. Quem tiver isto entra no Telegram como o El
+     * Pedrito, le as conversas todas e escreve a quem quiser. Nunca no
+     * repositorio, nunca num print: so na variavel de ambiente da plataforma.
+     */
+    USERBOT_SESSION: optionalString.transform((value) => value ?? ''),
+
 
     // --- Caixa de entrada -------------------------------------------------
     /**

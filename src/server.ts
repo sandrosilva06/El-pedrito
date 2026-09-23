@@ -17,7 +17,8 @@ import { jaLimpou, limparConversas } from './db/limpeza';
 import { preencherNomes } from './telegram/identidades';
 import { LEADS_RECUPERADOS } from './db/leads-recuperados';
 import { startRemarketingScheduler, stopRemarketingScheduler } from './scheduler/remarketing';
-import { BOT_COMMANDS, bot } from './telegram/bot';
+import { BOT_COMMANDS, bot, resumeWithAi, turnoDoUserbot } from './telegram/bot';
+import { iniciarUserbot, pararUserbot } from './telegram/userbot';
 import { createInboxRouter } from './web/inbox';
 import { ADMIN_HTML } from './web/page';
 import { createLogger } from './utils/logger';
@@ -238,6 +239,22 @@ async function start(): Promise<void> {
     log.warn('falha a preencher nomes dos leads', error);
   });
 
+  // A conta de utilizador, quando estiver configurada. Fica DEPOIS das
+  // reposicoes e antes do backup: precisa da base de dados em dia, e nao
+  // precisa de mais nada. Se nao arrancar, o funil continua pela Bot API.
+  if (env.USERBOT_ENABLED) {
+    const ligado = await iniciarUserbot({
+      aoLeadEscrever: turnoDoUserbot,
+      retomar: resumeWithAi,
+    });
+
+    log.info(
+      ligado
+        ? 'atendimento pela conta de utilizador activo (controlo silencioso ligado)'
+        : 'a conta de utilizador nao ficou activa; o funil corre pela Bot API',
+    );
+  }
+
   // Backup periodico para o canal. Enquanto nao houver disco persistente, e o
   // que fica entre um deploy e perder tudo outra vez.
   if (env.BACKUP_ENABLED) {
@@ -363,6 +380,11 @@ async function shutdown(signal: string): Promise<void> {
     // exactamente o momento em que a base de dados esta prestes a desaparecer.
     if (backupTimer) clearInterval(backupTimer);
     if (env.BACKUP_ENABLED) await backupDatabase(bot.api);
+
+    // A sessao da conta fecha-se com jeito. Uma ligacao MTProto deixada
+    // pendurada a cada deploy acumula sessoes activas do lado do Telegram, e
+    // isso e um dos sinais que levam contas a ser revistas.
+    await pararUserbot();
 
     await closeDatabase();
     log.info('encerrado com sucesso');

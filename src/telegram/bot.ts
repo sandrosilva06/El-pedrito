@@ -29,6 +29,7 @@ import { sanitiseDashes } from '../utils/text';
 import { detectCanton } from '../utils/canton';
 import { detectBettingExperience } from '../utils/experience';
 import { nextOccurrenceUtc } from '../utils/timezone';
+import { canalParaChat, registarCanal, type Canal } from './canal';
 
 const log = createLogger('telegram');
 
@@ -769,13 +770,58 @@ bot.on([':photo', ':document'], async (ctx) => {
  * de ponte para a api, ligada a este chat.
  */
 function contextoParaChat(chatId: number): Context {
+  // O canal e resolvido a cada envio, e nao aqui: um Context destes e criado
+  // uma vez e usado ao longo de uma resposta inteira, e entre a primeira
+  // bolha e a ultima o lead pode ter acabado de ser marcado como userbot.
   return {
     chat: { id: chatId, type: 'private' },
-    reply: (text: string, other?: Record<string, unknown>) =>
-      bot.api.sendMessage(chatId, text, other as never),
-    replyWithChatAction: (action: string) =>
-      bot.api.sendChatAction(chatId, action as never),
+    reply: async (text: string) => {
+      const canal = await canalParaChat(chatId);
+      const { messageId } = await canal.enviar(chatId, text);
+      return { message_id: messageId };
+    },
+    replyWithChatAction: async () => {
+      const canal = await canalParaChat(chatId);
+      await canal.aEscrever(chatId);
+    },
   } as unknown as Context;
+}
+
+/**
+ * A Bot API como canal, para o funil nao precisar de saber qual e qual.
+ *
+ * O apagar nao faz nada de propósito: numa conversa privada um bot nao pode
+ * apagar mensagens de outra pessoa, e fingir que apagou seria pior do que
+ * dizer que nao apaga. Quem apaga comandos e o userbot.
+ */
+const canalDoBot: Canal = {
+  nome: 'bot',
+  async enviar(chatId, texto) {
+    const enviada = await bot.api.sendMessage(chatId, texto, {
+      link_preview_options: { is_disabled: true },
+    });
+    return { messageId: enviada.message_id };
+  },
+  async aEscrever(chatId) {
+    await bot.api.sendChatAction(chatId, 'typing');
+  },
+  async apagar() {
+    // Ver acima: a Bot API nao o permite numa conversa privada.
+  },
+};
+
+registarCanal(canalDoBot);
+
+/**
+ * Um turno do funil para um lead que chegou pela conta de utilizador.
+ *
+ * O userbot nao tem Context do grammy: entra por aqui, e daqui para dentro e o
+ * mesmo caminho de sempre — a mesma fila por chat, a mesma cadeia das duas
+ * IAs, o mesmo ritmo humano. A unica diferenca e por onde a resposta sai, e
+ * disso trata o canal.
+ */
+export function turnoDoUserbot(chatId: number, texto: string): void {
+  dispatchFunnelTurn(contextoParaChat(chatId), chatId, texto, { storeIncoming: true });
 }
 
 /**

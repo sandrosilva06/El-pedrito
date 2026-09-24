@@ -15,7 +15,7 @@ import {
   setStage,
   type FunnelStage,
 } from '../db/database';
-import { bot, invalidateChat, resumeWithAi, sendVipWelcome } from '../telegram/bot';
+import { bot, invalidateChat, resumeWithAi, sendVipWelcome, turnoDoUserbot } from '../telegram/bot';
 import { eventos } from '../utils/eventos';
 import { guiaoDisparoManual } from '../services/remarketing';
 import { createLogger } from '../utils/logger';
@@ -238,12 +238,36 @@ export function createInboxRouter(): Router {
     }
   });
 
+  /**
+   * Entrar na conta guarda a sessao — e NAO chega.
+   *
+   * O cliente do MTProto so era criado no arranque, portanto sem isto o login
+   * pela pagina deixava a conta muda ate ao deploy seguinte, sem nada no ecra
+   * a explicar porque. Ligar aqui e o que torna o login util no momento em que
+   * e feito.
+   */
+  async function ligarAposLogin(resultado: { estado: string }): Promise<unknown> {
+    if (resultado.estado !== 'entrou') return resultado;
+
+    const { iniciarUserbot } = await import('../telegram/userbot');
+
+    const ligou = await iniciarUserbot({
+      aoLeadEscrever: turnoDoUserbot,
+      retomar: resumeWithAi,
+      // Quem acabou de entrar na conta quer que ela atenda, mesmo que o
+      // interruptor de ambiente ainda esteja por pôr.
+      forcar: true,
+    });
+
+    return { ...resultado, ligou };
+  }
+
   router.post('/userbot/codigo', async (req, res) => {
     const codigo = String((req.body as { codigo?: string }).codigo ?? '').trim();
 
     try {
       const { confirmarCodigo } = await import('../telegram/userbot-login');
-      res.json(await confirmarCodigo(codigo));
+      res.json(await ligarAposLogin(await confirmarCodigo(codigo)));
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
     }
@@ -254,7 +278,29 @@ export function createInboxRouter(): Router {
 
     try {
       const { confirmarPassword } = await import('../telegram/userbot-login');
-      res.json(await confirmarPassword(password));
+      res.json(await ligarAposLogin(await confirmarPassword(password)));
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  /**
+   * Ligar a conta sem voltar a fazer login, quando ja ha sessao guardada.
+   *
+   * Serve para o caso de ela cair, ou de o USERBOT_ENABLED so ter sido posto
+   * depois do login — evita um deploy so para religar.
+   */
+  router.post('/userbot/ligar', async (_req, res) => {
+    try {
+      const { iniciarUserbot } = await import('../telegram/userbot');
+
+      const ligou = await iniciarUserbot({
+        aoLeadEscrever: turnoDoUserbot,
+        retomar: resumeWithAi,
+        forcar: true,
+      });
+
+      res.json({ ligou });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
     }
@@ -263,12 +309,13 @@ export function createInboxRouter(): Router {
   /** Em que pe esta a conta, para a pagina saber o que mostrar. */
   router.get('/userbot/estado', async (_req, res) => {
     const { sessaoGuardada } = await import('../telegram/userbot-login');
-    const { temUserbot } = await import('../telegram/canal');
+    const { userbotLigado } = await import('../telegram/userbot');
 
     res.json({
       // Nunca a sessao em si: so se existe.
       temSessao: (await sessaoGuardada()).length > 0,
-      ligado: temUserbot(),
+      // Ha mesmo um cliente ligado, e nao apenas um canal registado.
+      ligado: userbotLigado(),
       activo: env.USERBOT_ENABLED,
       temCredenciais: Boolean(env.TELEGRAM_API_ID && env.TELEGRAM_API_HASH),
     });

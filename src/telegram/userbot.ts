@@ -91,8 +91,10 @@ export function userbotCliente(): any {
  * A sessao pode vir da variavel de ambiente ou do login feito pela pagina —
  * por isso isto e assincrono, e nao uma leitura de configuracao.
  */
-export async function userbotConfigurado(): Promise<boolean> {
-  if (!env.USERBOT_ENABLED) return false;
+export async function userbotConfigurado(
+  opcoes: { ignorarInterruptor?: boolean } = {},
+): Promise<boolean> {
+  if (!env.USERBOT_ENABLED && !opcoes.ignorarInterruptor) return false;
   if (!env.TELEGRAM_API_ID || !env.TELEGRAM_API_HASH) return false;
 
   const { sessaoGuardada } = await import('./userbot-login');
@@ -232,8 +234,22 @@ export async function tratarMensagem(params: {
 }
 
 
+/** Ha um cliente ligado neste momento? */
+export function userbotLigado(): boolean {
+  return cliente !== null;
+}
+
 /**
  * Liga a conta e fica a ouvir.
+ *
+ * CHAMADO EM DOIS MOMENTOS, e isso e o ponto:
+ *  - no arranque, se o USERBOT_ENABLED estiver ligado e ja houver sessao;
+ *  - logo a seguir a um login feito pela pagina, com `forcar`, porque quem
+ *    acabou de entrar na conta quer obviamente que ela passe a atender.
+ *
+ * Sem o segundo, o login pela pagina guardava a sessao e nao acontecia mais
+ * nada ate ao deploy seguinte — a conta ficava muda e nada no ecra dizia
+ * porque.
  *
  * Nunca lanca: um userbot que nao arranca nao pode levar o funil atras dele. O
  * servico continua a atender pela Bot API e o log diz o que falhou.
@@ -241,17 +257,22 @@ export async function tratarMensagem(params: {
 export async function iniciarUserbot(params: {
   aoLeadEscrever: (chatId: number, texto: string) => void;
   retomar: (chatId: number) => Promise<boolean>;
+  /** Ignora o USERBOT_ENABLED: usado a seguir a um login feito a mao. */
+  forcar?: boolean;
 }): Promise<boolean> {
-  if (!env.USERBOT_ENABLED) return false;
+  if (!env.USERBOT_ENABLED && !params.forcar) return false;
 
-  if (!(await userbotConfigurado())) {
+  if (!(await userbotConfigurado({ ignorarInterruptor: params.forcar === true }))) {
     log.warn(
-      'USERBOT_ENABLED esta ligado mas ainda nao ha sessao. ' +
-        'Entra em /admin e faz o login da conta por la, ou define ' +
-        'TELEGRAM_API_ID, TELEGRAM_API_HASH e USERBOT_SESSION.',
+      'sem sessao para a conta. Entra em /admin e faz o login da conta por la, ' +
+        'ou define TELEGRAM_API_ID, TELEGRAM_API_HASH e USERBOT_SESSION.',
     );
     return false;
   }
+
+  // Religar por cima de uma ligacao viva deixaria a anterior a receber updates
+  // em paralelo: duas escutas, cada mensagem tratada duas vezes.
+  if (cliente) await pararUserbot();
 
   try {
     const { TelegramClient, Api } = await import('teleproto');

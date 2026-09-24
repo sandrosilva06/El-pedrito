@@ -261,6 +261,11 @@ export const ADMIN_HTML = String.raw`<!doctype html>
       </p>
     </div>
 
+    <div id="conta-religar" hidden>
+      <button class="botao discreto" id="conta-ligar">Ligar a conta agora</button>
+      <p class="nota">Ja ha sessao guardada. Isto liga sem voltares a fazer login.</p>
+    </div>
+
     <p class="nota erro" id="conta-erro" hidden></p>
   </div>
 </section>
@@ -413,11 +418,22 @@ $('ir-conta').addEventListener('click', async () => {
       return;
     }
 
-    $('conta-estado').textContent = e.ligado
-      ? 'A conta esta ligada e a atender. So precisas de voltar aqui se a sessao se perder.'
-      : e.temSessao
-        ? 'Ha uma sessao guardada, mas a conta nao esta a atender. Confirma que o USERBOT_ENABLED esta a true e faz deploy.'
-        : 'A conta ainda nao entrou. Escreve o numero para receberes o codigo no Telegram.';
+    $('conta-religar').hidden = !(e.temSessao && !e.ligado);
+
+    if (e.ligado) {
+      $('conta-estado').textContent = 'A conta esta ligada e a atender.'
+        + (e.activo ? '' : ' Atencao: o USERBOT_ENABLED nao esta a true, por isso no proximo deploy nao volta a ligar sozinha.');
+      passoConta('nenhum');
+    } else if (e.temSessao) {
+      $('conta-estado').textContent =
+        'Ha sessao guardada mas a conta nao esta a atender. Carrega em "Ligar a conta agora".'
+        + (e.activo ? '' : ' Poe tambem USERBOT_ENABLED=true no Render, senao volta a cair no proximo deploy.');
+      passoConta('nenhum');
+    } else {
+      $('conta-estado').textContent =
+        'A conta ainda nao entrou. Escreve o numero para receberes o codigo no Telegram.';
+      passoConta('telefone');
+    }
   } catch (err) {
     erroConta(err.message);
   }
@@ -457,7 +473,10 @@ async function concluirConta(caminho, corpo) {
     return;
   }
 
-  $('conta-quem').textContent = 'Entrou como ' + r.nome + '.';
+  $('conta-quem').textContent = 'Entrou como ' + r.nome + '. '
+    + (r.ligou
+        ? 'A conta ja esta a atender.'
+        : 'ATENCAO: entrou mas NAO ficou a atender. Ve o log do Render.');
   $('conta-sessao').value = r.sessao;
   passoConta('feito');
 }
@@ -486,6 +505,23 @@ $('conta-confirmar-password').addEventListener('click', async () => {
     erroConta(err.message);
   } finally {
     $('conta-confirmar-password').disabled = false;
+  }
+});
+
+$('conta-ligar').addEventListener('click', async () => {
+  $('conta-ligar').disabled = true;
+  $('conta-erro').hidden = true;
+
+  try {
+    const r = await api('/userbot/ligar', { method: 'POST' });
+    $('conta-estado').textContent = r.ligou
+      ? 'A conta ficou ligada e a atender.'
+      : 'Nao consegui ligar. Ve o log do Render para saber porque.';
+    $('conta-religar').hidden = r.ligou;
+  } catch (err) {
+    erroConta(err.message);
+  } finally {
+    $('conta-ligar').disabled = false;
   }
 });
 

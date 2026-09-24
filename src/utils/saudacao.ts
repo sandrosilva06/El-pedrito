@@ -12,8 +12,19 @@
  * saber bem porque.
  */
 
-/** Limites, nas palavras do pedido: ate as 12:00, ate as 19:59, dai em diante. */
+/**
+ * Os limites:
+ *   00:00–05:59  Boa noite
+ *   06:00–11:59  Bom dia
+ *   12:00–19:59  Boa tarde
+ *   20:00–23:59  Boa noite
+ *
+ * A madrugada fica com "Boa noite" e nao com "Bom dia", apesar de ser tecnicamente
+ * de manha: um lead que escreve a uma da manha e ouve "Bom dia" percebe logo que
+ * do outro lado ninguem esta a olhar para o relogio. Foi visto a acontecer.
+ */
 export function saudacaoPara(horaSuica: number): string {
+  if (horaSuica < 6) return 'Boa noite';
   if (horaSuica < 12) return 'Bom dia';
   if (horaSuica < 20) return 'Boa tarde';
   return 'Boa noite';

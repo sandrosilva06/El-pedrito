@@ -174,11 +174,16 @@ const schema = z
      * segundo lembrete tambem nao responde ao decimo — so bloqueia o bot, e
      * bloqueios em massa fazem o Telegram limitar a conta.
      *
-     * O codigo trava isto em 2 de qualquer maneira (ver NAO_CONVERTIDO_TOUCHES
-     * no servico): so ha guiao escrito para dois toques, e um terceiro sairia
-     * sem texto proprio.
+     * DOZE: com cinco disparos por dia, sao cerca de dois dias e meio de
+     * insistencia antes de o bot se calar. Do terceiro toque em diante e
+     * sempre o guiao persistente, que muda de angulo a cada envio.
+     *
+     * O numero e baixo de proposito. O funil corre numa CONTA de pessoa, e
+     * nao num bot: o Telegram bane contas por padrao de spam, e uma conta
+     * banida leva as conversas todas com ela, incluindo as de quem ja pagou.
+     * Um bot recria-se; a conta nao.
      */
-    REMARKETING_MAX_TOUCHES: intFromString(1000, 1, 1000),
+    REMARKETING_MAX_TOUCHES: intFromString(12, 1, 1000),
     /** Horas minimas entre a ultima atividade do lead e um lembrete. */
     REMARKETING_QUIET_HOURS: intFromString(20, 1, 720),
     /**

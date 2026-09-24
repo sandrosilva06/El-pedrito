@@ -16,6 +16,12 @@ import {
   setCanton,
   setHumanHandover,
   setJob,
+  setAtencao,
+  setNomePerguntado,
+  setOficioPedrito,
+  setTag,
+  setTempoSuica,
+  setTratamento,
   setDepositPromise,
   setNotes,
   upsertLead,
@@ -28,6 +34,8 @@ import { createLogger } from '../utils/logger';
 import { sanitiseDashes } from '../utils/text';
 import { detectCanton } from '../utils/canton';
 import { detectBettingExperience } from '../utils/experience';
+import { comoTratar, extrairNome } from '../utils/nomes';
+import { sentidoDaImagem } from '../utils/legenda';
 import { nextOccurrenceUtc } from '../utils/timezone';
 import { canalParaChat, registarCanal, type Canal } from './canal';
 
@@ -154,6 +162,8 @@ async function leadFromContext(ctx: Context): Promise<Lead | null> {
     languageCode: ctx.from?.language_code ?? null,
   });
 
+  await prepararLead(lead);
+
   // Qualquer sinal de vida de quem ja levou um toque encerra a campanha para
   // ele. Fica aqui, e nao no handler de texto, porque uma foto ou um sticker
   // sao resposta na mesma: a pessoa voltou, e quem voltou passa a ter uma
@@ -161,6 +171,27 @@ async function leadFromContext(ctx: Context): Promise<Lead | null> {
   await cancelRemarketing(chatId);
 
   return lead;
+}
+
+/**
+ * O que se decide UMA vez, quando o lead aparece.
+ *
+ * - Como o tratar: se o perfil do Telegram der um nome de pessoa, usa-se esse
+ *   e nunca se pergunta o nome. Se der uma alcunha ou numeros, fica por
+ *   perguntar.
+ * - Em que o Pedrito trabalhou: obras ou restauracao, a sorte, mas UMA vez e
+ *   guardado. Sem isto o modelo dizia obras num turno e restauracao noutro, ao
+ *   mesmo lead — e ninguem muda de passado a meio de uma conversa.
+ */
+async function prepararLead(lead: Lead): Promise<void> {
+  if (!lead.tratamento) {
+    const { nome } = comoTratar(lead.firstName, lead.username);
+    if (nome) await setTratamento(lead.chatId, nome);
+  }
+
+  if (!lead.oficioPedrito) {
+    await setOficioPedrito(lead.chatId, Math.random() < 0.5 ? 'obras' : 'restauracao');
+  }
 }
 
 /** O Telegram rejeita mensagens acima de 4096 caracteres. */
@@ -452,6 +483,23 @@ async function recordJob(chatId: number, known: string | null, directive: SalesD
 }
 
 /**
+ * Grava o nome, o que lhe chamou a atencao e ha quanto tempo esta na Suica.
+ *
+ * Sao os campos que impedem as perguntas de se repetirem. Como todos os
+ * outros, a primeira resposta e a que fica — a guarda esta no proprio SQL,
+ * por isso escrever por cima nao faz mal nenhum.
+ */
+function recordFactosNovos(chatId: number, lead: Lead, directive: SalesDirective): void {
+  if (!lead.tratamento && directive.nome) {
+    const limpo = extrairNome(directive.nome);
+    if (limpo) void setTratamento(chatId, limpo);
+  }
+
+  if (!lead.atencao && directive.atencao) void setAtencao(chatId, directive.atencao);
+  if (!lead.tempoSuica && directive.tempoSuica) void setTempoSuica(chatId, directive.tempoSuica);
+}
+
+/**
  * Guarda se o lead ja aposta ou esta a comecar, pelas mesmas razoes do cantao:
  * e o campo guardado, e nao a memoria do modelo, que trava a repeticao da
  * pergunta na fase 2.
@@ -637,6 +685,7 @@ async function runFunnelTurn(
       recordCanton(chatId, current.canton, incoming, directive);
       recordJob(chatId, current.job, directive);
       recordExperience(chatId, current.bettingExperience, incoming, directive);
+      recordFactosNovos(chatId, current, directive);
 
       if (directive.notes.trim().length > 0) {
         const merged = [current.notes, directive.notes.trim()]
@@ -726,13 +775,20 @@ bot.on([':photo', ':document'], async (ctx) => {
   // Ele mexeu-se: nao faz sentido apitar-lhe o lembrete de deposito a seguir.
   await clearDepositPromise(lead.chatId);
 
-  // Fica no historico para o estrategista saber que a imagem chegou e que
-  // ficou sem resposta. E ele que decide o que fazer quando o lead escrever.
+  // A LEGENDA E QUE DECIDE o que a imagem e. A imagem sozinha nao diz nada:
+  // ja aconteceu o bot agradecer um "deposito" que era um print de um erro, e
+  // o lead bloqueou, com razao.
+  const legenda = (message.caption ?? '').trim();
+  const sentido = sentidoDaImagem(legenda);
+
   await addMessage({
     chatId: lead.chatId,
     role: 'user',
-    content: '[o lead enviou uma imagem; ninguem lhe respondeu e ainda nao se sabe o que ela mostra]',
-    author: 'sistema',
+    content:
+      legenda.length > 0
+        ? legenda
+        : '[o lead enviou uma imagem; ninguem lhe respondeu e ainda nao se sabe o que ela mostra]',
+    author: legenda.length > 0 ? 'bot' : 'sistema',
     // O file_id vai junto para a caixa de entrada poder mostrar a imagem. Ate
     // aqui ele so existia em deposit_proofs, que a caixa nao le, e a conversa
     // ficava com um marcador de texto onde o lead tinha mandado um print.
@@ -740,10 +796,24 @@ bot.on([':photo', ':document'], async (ctx) => {
     mediaKind: fileKind === 'photo' ? 'photo' : 'document',
   });
 
-  // Uma imagem e quase sempre um comprovativo, e um comprovativo e uma decisao
-  // minha: valido o pagamento fora do que o bot ve. A IA fica calada nesta
-  // conversa ate eu decidir, para nao confirmar acessos que nao dei nem
-  // mandar o lead repetir um passo que ele ja fez.
+  if (sentido === 'problema') {
+    // Ele mandou um print A PEDIR AJUDA. Calar o bot aqui e deixa-lo pendurado
+    // com um erro no ecra: o funil responde e tenta resolver.
+    //
+    // A equipa e avisada na mesma, ANTES de sair daqui: um lead travado e
+    // precisamente o que alguem tem de ver, e nao so o que ja pagou.
+    log.info(`imagem #${proof.id} com queixa — chat=${lead.chatId}, o funil vai ajudar`);
+    await notifyAdmins(proof.id, lead, fileId, fileKind, sentido);
+    dispatchFunnelTurn(ctx, lead.chatId, legenda, { storeIncoming: false });
+    return;
+  }
+
+  if (sentido === 'comprovativo') {
+    await advanceStage(lead.chatId, 'comprovativo_recebido');
+  }
+
+  // Comprovativo ou imagem sem explicacao: a IA fica calada. Validar um
+  // deposito e uma decisao de uma pessoa, tomada fora do que o bot ve.
   await setHumanHandover(lead.chatId, true);
   invalidateChat(lead.chatId);
 
@@ -754,7 +824,7 @@ bot.on([':photo', ':document'], async (ctx) => {
       'reencaminhada para validacao, conversa passada para a mao',
   );
 
-  await notifyAdmins(proof.id, lead, fileId, fileKind);
+  await notifyAdmins(proof.id, lead, fileId, fileKind, sentido);
 });
 
 /**
@@ -929,14 +999,26 @@ async function notifyAdmins(
   lead: Lead,
   fileId: string,
   fileKind: 'photo' | 'document',
+  /** O que o lead escreveu por baixo, se escreveu. */
+  sentido: 'comprovativo' | 'problema' | 'indefinido' = 'indefinido',
 ): Promise<void> {
   if (adminChatIds.size === 0) {
     log.error('sem destino de administracao: comprovativo guardado, mas ninguem foi avisado');
     return;
   }
 
+  // "FEITO" a cabeca quando o lead o escreveu: e o que a equipa de analise
+  // procura para saber que aquele print e um deposito para validar, e nao mais
+  // uma imagem qualquer a precisar de ser lida.
+  const cabecalho =
+    sentido === 'comprovativo'
+      ? 'FEITO — deposito para validar'
+      : sentido === 'problema'
+        ? `Imagem #${proofId} — o lead reportou um PROBLEMA (o funil esta a ajudar)`
+        : `Imagem #${proofId} — por validar`;
+
   const caption =
-    `Imagem #${proofId} — por validar\n\n` +
+    `${cabecalho}\n\n` +
     `Nome: ${lead.firstName ?? '(sem nome)'}\n` +
     `Username: ${lead.username ? `@${lead.username}` : '(sem username)'}\n` +
     `ID: ${lead.chatId}`;

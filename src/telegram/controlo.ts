@@ -77,9 +77,76 @@ export function ehComandoParar(texto: string): boolean {
   return COMANDOS_PARAR.includes(limpo);
 }
 
+/**
+ * Marcar o lead como qualificado (ja depositou) ou nao.
+ *
+ * Sao a origem das duas campanhas de remarketing: quem tem tag "qualificado"
+ * recebe avisos das entradas do grupo, quem tem "nao_qualificado" continua a
+ * ser trabalhado para depositar.
+ */
+const COMANDOS_TAG: Record<string, string> = {
+  '/aprovado': 'qualificado',
+  '/qualificado': 'qualificado',
+  '/naoaprovado': 'nao_qualificado',
+  '/nao aprovado': 'nao_qualificado',
+  '/naoqualificado': 'nao_qualificado',
+};
+
+export function tagDoComando(texto: string): string | null {
+  const limpo = texto
+    .trim()
+    .toLowerCase()
+    .replace(/[.!]+$/, '')
+    .replace(/\s+/g, ' ');
+
+  return COMANDOS_TAG[limpo] ?? null;
+}
+
 /** Um comando de controlo nunca vai para o lead nem para o historico. */
 export function ehComandoDeControlo(texto: string): boolean {
-  return ehComandoRetomar(texto) || ehComandoParar(texto);
+  return ehComandoRetomar(texto) || ehComandoParar(texto) || tagDoComando(texto) !== null;
+}
+
+/**
+ * Escrevi "/aprovado" ou "/naoaprovado" na conversa.
+ *
+ * Mesma mecanica dos outros comandos: apagado do Telegram "no segundo a
+ * seguir", nunca gravado, e o lead nunca ve nada. O que muda e a etiqueta, que
+ * decide qual das campanhas lhe toca a partir de agora.
+ *
+ * O "/aprovado" tambem poe o estagio em acesso_liberado: quem depositou ja nao
+ * e alvo de campanhas de venda, e o remarketing le o estagio.
+ */
+export async function aoComandoTag(params: {
+  chatId: number;
+  messageId: number;
+  tag: string;
+  apagar: (chatId: number, messageId: number) => Promise<void>;
+}): Promise<{ apagado: boolean; tag: string }> {
+  const { chatId, messageId, tag, apagar } = params;
+
+  let apagado = false;
+
+  try {
+    await apagar(chatId, messageId);
+    apagado = true;
+  } catch (error) {
+    log.warn(`chat ${chatId}: nao consegui apagar o comando; sigo na mesma`, error);
+  }
+
+  const { setTag, advanceStage } = await import('../db/database');
+
+  await upsertLead({ chatId });
+  await setTag(chatId, tag);
+
+  if (tag === 'qualificado') {
+    // Ja depositou: sai das campanhas de venda e entra nas de acompanhamento.
+    await advanceStage(chatId, 'acesso_liberado');
+  }
+
+  log.info(`chat ${chatId}: marcado como ${tag}`);
+
+  return { apagado, tag };
 }
 
 export interface MensagemDoOperador {

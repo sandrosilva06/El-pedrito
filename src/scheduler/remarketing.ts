@@ -13,6 +13,7 @@ import {
 } from '../db/database';
 import {
   NAO_CONVERTIDO_TOUCHES,
+  TOQUE_PERSISTENTE,
   generateRemarketingMessage,
   personalise,
 } from '../services/remarketing';
@@ -36,7 +37,16 @@ const SEND_INTERVAL_MS = env.REMARKETING_SEND_INTERVAL_MS;
  * escritos: um toque a mais sairia sem texto proprio, e a variavel de ambiente
  * pode estar posta num valor antigo num deploy que ja esta a correr.
  */
-const MAX_TOUCHES = Math.min(env.REMARKETING_MAX_TOUCHES, NAO_CONVERTIDO_TOUCHES.length);
+/**
+ * Quantos toques um lead que nao converteu leva.
+ *
+ * Deixou de estar limitado ao numero de guioes escritos: o ultimo guiao e o
+ * PERSISTENTE, feito para se repetir mudando de angulo. Quem nao depositou
+ * continua a ser trabalhado ate depositar ou bloquear — e sao essas as duas
+ * unicas saidas, ambas tratadas em codigo (o estagio tira-o da lista, o 403 do
+ * Telegram marca-o como bloqueado).
+ */
+const MAX_TOUCHES = env.REMARKETING_MAX_TOUCHES;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -103,7 +113,11 @@ async function sendToAudience(
 
     considered += targets.length;
 
-    const { template, generated } = await generateRemarketingMessage(audience, touch);
+    // Do terceiro toque em diante e sempre o guiao persistente: e o unico
+    // escrito para se repetir sem cansar.
+    const guiao = audience === 'nao_convertido' ? Math.min(touch, TOQUE_PERSISTENTE) : touch;
+
+    const { template, generated } = await generateRemarketingMessage(audience, guiao);
     log.info(
       `slot ${slot} (${audience}, toque ${touch + 1}): ${targets.length} leads, ` +
         `mensagem ${generated ? 'gerada' : 'de reserva'}`,
@@ -230,9 +244,9 @@ export function startRemarketingScheduler(): void {
 
   log.info(
     `remarketing activo — slots ${slots.join(', ')} (${env.REMARKETING_TIMEZONE}), ` +
-      `${MAX_TOUCHES} toque(s) por lead que nao converteu ` +
-      `(1.o as ${env.REMARKETING_FIRST_TOUCH_HOURS}h de silencio, ` +
-      `2.o ${env.REMARKETING_SECOND_TOUCH_HOURS}h depois), ` +
+      `ate ${MAX_TOUCHES} toque(s) por lead que nao converteu, a cada ` +
+      `${env.REMARKETING_SECOND_TOUCH_HOURS}h de silencio ` +
+      `(o 1.o as ${env.REMARKETING_FIRST_TOUCH_HOURS}h), ate depositar ou bloquear, ` +
       `${SEND_INTERVAL_MS}ms entre envios, ` +
       'lembretes de promessa a cada minuto',
   );

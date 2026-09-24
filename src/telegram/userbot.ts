@@ -34,6 +34,8 @@ import {
   ehComandoParar,
   ehComandoRetomar,
   pausarPorMedia,
+  tagDoComando,
+  aoComandoTag,
 } from './controlo';
 
 const log = createLogger('userbot');
@@ -165,7 +167,8 @@ export async function tratarMensagem(params: {
   retomar: (chatId: number) => Promise<boolean>;
   aoLeadEscrever: (chatId: number, texto: string) => void;
 }): Promise<
-  'nossa' | 'comando-retomar' | 'comando-parar' | 'manual' | 'lead' | 'lead-media'
+  | 'nossa' | 'comando-retomar' | 'comando-parar' | 'comando-tag'
+  | 'manual' | 'lead' | 'lead-media'
 > {
   const {
     chatId,
@@ -196,6 +199,12 @@ export async function tratarMensagem(params: {
     if (ehComandoParar(texto)) {
       await aoComandoParar({ chatId, messageId, apagar });
       return 'comando-parar';
+    }
+
+    const tag = tagDoComando(texto);
+    if (tag) {
+      await aoComandoTag({ chatId, messageId, tag, apagar });
+      return 'comando-tag';
     }
 
     // 3. Escrevi a mao: o bot cala-se.

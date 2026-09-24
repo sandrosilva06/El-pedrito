@@ -81,6 +81,24 @@ export interface Lead {
    */
   transporte: 'bot' | 'userbot';
   /**
+   * Como se trata este lead. Vem do perfil do Telegram ou da resposta dele.
+   *
+   * Os cinco campos a seguir sao o coracao da memoria do funil: cada um e uma
+   * pergunta que, depois de respondida, fica PROIBIDA. Perder leads por
+   * perguntar duas vezes a mesma coisa foi o que fez isto existir.
+   */
+  tratamento: string | null;
+  /** Ja se perguntou o nome (para nao perguntar outra vez a quem nao respondeu). */
+  nomePerguntado: boolean;
+  /** O que o trouxe aqui, nas palavras dele. */
+  atencao: string | null;
+  /** Ha quanto tempo vive na Suica. */
+  tempoSuica: string | null;
+  /** Em que o Pedrito diz ter trabalhado com ESTE lead: obras ou restauracao. */
+  oficioPedrito: string | null;
+  /** "qualificado" (ja depositou) ou "nao_qualificado", posto por comando. */
+  tag: string | null;
+  /**
    * Em que trabalha, nas palavras dele. Null enquanto nao se souber.
    *
    * Ao contrario do cantao e da experiencia, nao ha detector em codigo: uma
@@ -180,6 +198,12 @@ interface LeadRow {
   last_name: string | null;
   pinned: number;
   transporte: string | null;
+  tratamento: string | null;
+  nome_perguntado: number;
+  atencao: string | null;
+  tempo_suica: string | null;
+  oficio_pedrito: string | null;
+  tag: string | null;
   job: string | null;
   betting_experience: string | null;
   first_name: string | null;
@@ -378,6 +402,13 @@ const COLUNAS: Array<{ tabela: string; coluna: string; sqlite: string; postgres:
   { tabela: 'leads', coluna: 'pinned', sqlite: 'INTEGER NOT NULL DEFAULT 0', postgres: 'INTEGER NOT NULL DEFAULT 0' },
   { tabela: 'leads', coluna: 'last_name', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'leads', coluna: 'transporte', sqlite: "TEXT NOT NULL DEFAULT 'bot'", postgres: "TEXT NOT NULL DEFAULT 'bot'" },
+  // --- Factos do lead: cada um destes e uma pergunta que NUNCA se repete ---
+  { tabela: 'leads', coluna: 'tratamento', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'nome_perguntado', sqlite: 'INTEGER NOT NULL DEFAULT 0', postgres: 'INTEGER NOT NULL DEFAULT 0' },
+  { tabela: 'leads', coluna: 'atencao', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'tempo_suica', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'oficio_pedrito', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'tag', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'messages', coluna: 'author', sqlite: "TEXT NOT NULL DEFAULT 'bot'", postgres: "TEXT NOT NULL DEFAULT 'bot'" },
   { tabela: 'messages', coluna: 'media_file_id', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'messages', coluna: 'media_kind', sqlite: 'TEXT', postgres: 'TEXT' },
@@ -476,6 +507,12 @@ function mapLead(row: LeadRow): Lead {
     lastName: row.last_name,
     pinned: row.pinned === 1,
     transporte: row.transporte === 'userbot' ? 'userbot' : 'bot',
+    tratamento: row.tratamento,
+    nomePerguntado: row.nome_perguntado === 1,
+    atencao: row.atencao,
+    tempoSuica: row.tempo_suica,
+    oficioPedrito: row.oficio_pedrito,
+    tag: row.tag,
     job: row.job,
     bettingExperience: row.betting_experience,
     firstName: row.first_name,
@@ -645,6 +682,27 @@ const SQL = {
   `,
   setPinned: 'UPDATE leads SET pinned = ? WHERE chat_id = ?',
   setTransporte: 'UPDATE leads SET transporte = ? WHERE chat_id = ?',
+  setTag: "UPDATE leads SET tag = ?, updated_at = datetime('now') WHERE chat_id = ?",
+  // Todos com a mesma guarda do setJob: a PRIMEIRA resposta e a que fica. Um
+  // lead que se contradiz mais a frente nao faz o funil esquecer o que ele
+  // disse primeiro, e uma escrita repetida nao apaga o que ja la estava.
+  setTratamento: `
+    UPDATE leads SET tratamento = ?, updated_at = datetime('now')
+     WHERE chat_id = ? AND (tratamento IS NULL OR tratamento = '')
+  `,
+  setAtencao: `
+    UPDATE leads SET atencao = ?, updated_at = datetime('now')
+     WHERE chat_id = ? AND (atencao IS NULL OR atencao = '')
+  `,
+  setTempoSuica: `
+    UPDATE leads SET tempo_suica = ?, updated_at = datetime('now')
+     WHERE chat_id = ? AND (tempo_suica IS NULL OR tempo_suica = '')
+  `,
+  setOficioPedrito: `
+    UPDATE leads SET oficio_pedrito = ?
+     WHERE chat_id = ? AND (oficio_pedrito IS NULL OR oficio_pedrito = '')
+  `,
+  setNomePerguntado: 'UPDATE leads SET nome_perguntado = 1 WHERE chat_id = ?',
   setIdentity: `
     UPDATE leads
        SET first_name = coalesce(?, first_name),
@@ -1392,6 +1450,47 @@ export async function setJob(chatId: number, job: string): Promise<void> {
 /** A primeira resposta e a boa: escritas seguintes sao ignoradas no SQL. */
 export async function setBettingExperience(chatId: number, experience: string): Promise<void> {
   await conn().run(SQL.setBettingExperience, [experience, chatId]);
+}
+
+/** Como se trata o lead. A primeira vez que se souber e a que fica. */
+export async function setTratamento(chatId: number, nome: string): Promise<void> {
+  await conn().run(SQL.setTratamento, [nome.slice(0, 40), chatId]);
+}
+
+/** Marca que o nome ja foi perguntado, mesmo que ele nao responda. */
+export async function setNomePerguntado(chatId: number): Promise<void> {
+  await conn().run(SQL.setNomePerguntado, [chatId]);
+}
+
+/** O que o trouxe aqui. */
+export async function setAtencao(chatId: number, atencao: string): Promise<void> {
+  await conn().run(SQL.setAtencao, [atencao.slice(0, 200), chatId]);
+}
+
+/** Ha quanto tempo vive na Suica. */
+export async function setTempoSuica(chatId: number, tempo: string): Promise<void> {
+  await conn().run(SQL.setTempoSuica, [tempo.slice(0, 60), chatId]);
+}
+
+/**
+ * Em que o Pedrito diz ter trabalhado, com ESTE lead.
+ *
+ * Escolhido uma vez e guardado: sem isto, o modelo dizia "obras" num turno e
+ * "restauracao" tres turnos depois, ao mesmo lead. Uma pessoa nao muda de
+ * passado a meio da conversa.
+ */
+export async function setOficioPedrito(chatId: number, oficio: string): Promise<void> {
+  await conn().run(SQL.setOficioPedrito, [oficio, chatId]);
+}
+
+/**
+ * Marca o lead como qualificado (ja depositou) ou nao.
+ *
+ * Posta pelos comandos /aprovado e /naoaprovado, e e ela que decide qual das
+ * campanhas de remarketing lhe toca.
+ */
+export async function setTag(chatId: number, tag: string | null): Promise<void> {
+  await conn().run(SQL.setTag, [tag, chatId]);
 }
 
 export async function getStats(): Promise<FunnelStats> {

@@ -124,6 +124,19 @@ const schema = z
     ),
     /** Valor sugerido como ideal para acompanhar as entradas do dia. */
     SUGGESTED_DEPOSIT: optionalString.transform((value) => value ?? '50€'),
+    /**
+     * Passatempos citados no remarketing de quem ainda nao depositou.
+     *
+     * Fica em variavel, e VAZIO por omissao, pela mesma razao dos numeros de
+     * resultados: e uma afirmacao de facto dita a alguem antes de lhe ser
+     * pedido dinheiro. So se escreve aqui o que existe mesmo — prometer um
+     * sorteio que nao ha para levar alguem a depositar nao e marketing, e
+     * outra coisa, e quem responde por ela e quem escreveu esta linha.
+     *
+     * Vazio = o remarketing nao fala de passatempo nenhum.
+     * Exemplo: "um give away de 1000 CHF e um iPhone 18 Pro"
+     */
+    GIVEAWAY_CLAIM: optionalString.transform((value) => value ?? ''),
 
     MIN_AGE: intFromString(18, 0, 99),
     COMPLIANCE_NOTE: optionalString.transform(
@@ -136,11 +149,11 @@ const schema = z
     /**
      * Quantas mensagens curtas, no maximo, por resposta.
      *
-     * Quatro, que e o que o funil da qualificacao precisa: os turnos que
-     * apresentam a comunidade e explicam a condicao de entrada nao cabem em
-     * tres sem ficarem colados dois a dois.
+     * DOIS: "apos cada mensagem so podes enviar mais uma de seguida, no
+     * maximo dos maximos duas". O tecto e aqui, em codigo, e nao so no prompt
+     * — uma instrucao e uma sugestao, um tecto e uma garantia.
      */
-    MAX_BUBBLES: intFromString(4, 1, 8),
+    MAX_BUBBLES: intFromString(2, 1, 8),
     /** Duracao do "a escrever..." antes de cada mensagem, em ms. */
     TYPING_MS_MIN: intFromString(7000, 0, 60000),
     TYPING_MS_MAX: intFromString(8000, 0, 60000),
@@ -152,7 +165,7 @@ const schema = z
     /** Liga/desliga o envio automatico. */
     REMARKETING_ENABLED: optionalString.transform((value) => value !== 'false'),
     /** Horarios dos envios, hora local do fuso abaixo. */
-    REMARKETING_SLOTS: optionalString.transform((value) => value ?? '09:30,14:30,20:30'),
+    REMARKETING_SLOTS: optionalString.transform((value) => value ?? '09:30,12:30,15:30,18:30,21:00'),
     /** Fuso dos leads. A Suica, nao o servidor. */
     REMARKETING_TIMEZONE: optionalString.transform((value) => value ?? 'Europe/Zurich'),
     /**
@@ -165,19 +178,19 @@ const schema = z
      * no servico): so ha guiao escrito para dois toques, e um terceiro sairia
      * sem texto proprio.
      */
-    REMARKETING_MAX_TOUCHES: intFromString(2, 1, 1000),
+    REMARKETING_MAX_TOUCHES: intFromString(1000, 1, 1000),
     /** Horas minimas entre a ultima atividade do lead e um lembrete. */
     REMARKETING_QUIET_HOURS: intFromString(20, 1, 720),
     /**
      * Quanto tempo o lead tem de estar calado antes do PRIMEIRO toque. Conta
      * desde a ultima coisa que ele disse, nao desde que entrou.
      */
-    REMARKETING_FIRST_TOUCH_HOURS: intFromString(24, 1, 720),
+    REMARKETING_FIRST_TOUCH_HOURS: intFromString(3, 1, 720),
     /**
      * Intervalo entre o primeiro e o segundo toque. Com o valor por omissao o
      * segundo cai as 72h de silencio (24 + 48), que e o que se combinou.
      */
-    REMARKETING_SECOND_TOUCH_HOURS: intFromString(48, 1, 720),
+    REMARKETING_SECOND_TOUCH_HOURS: intFromString(3, 1, 720),
     /**
      * Silencio necessario para tocar em quem ja recebeu o link.
      *

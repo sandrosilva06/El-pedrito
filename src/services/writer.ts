@@ -3,6 +3,7 @@ import { GoogleGenAI, ThinkingLevel, type Content } from '@google/genai';
 import { env } from '../config/env';
 import type { Lead, StoredMessage } from '../db/database';
 import { createLogger } from '../utils/logger';
+import { saudacaoAgora } from '../utils/saudacao';
 import { sanitiseDashes } from '../utils/text';
 import { withRetry } from './retry';
 import type { LeadProfile, SalesDirective } from './strategist';
@@ -46,9 +47,10 @@ IDIOMA — PORTUGUES DE PORTUGAL, SEM EXCECOES:
 COMO ESCREVES — EM MENSAGENS SEPARADAS:
 - Escreves como quem manda mensagens no telemovel: varias curtas seguidas, nao
   um paragrafo comprido. NUNCA um testamento.
-- Divide a resposta em 1 a ${env.MAX_BUBBLES} mensagens, SEPARADAS POR UMA
-  LINHA EM BRANCO. Cada linha em branco e uma mensagem nova que o lead vai
-  receber a parte. Muitas respostas boas sao UMA mensagem so.
+- Divide a resposta em 1 ou 2 mensagens, SEPARADAS POR UMA LINHA EM BRANCO.
+  NUNCA TRES. Uma mensagem, e quando muito mais uma — quem manda tres seguidas
+  nao esta a conversar, esta a despejar, e e assim que se percebe que do outro
+  lado esta uma maquina. A maior parte das boas respostas e UMA so.
 - Cada mensagem: 1 a 2 frases curtas, uma ideia so. Se tens duas ideias, sao
   duas mensagens.
 - VARIA O TAMANHO. Uma pessoa a escrever no telemovel manda uma linha comprida
@@ -65,8 +67,15 @@ COMO ESCREVES — EM MENSAGENS SEPARADAS:
     de la quando quiseres.
     (linha em branco)
     Faz sentido?
-- No maximo uma pergunta em toda a resposta.
-- Trata SEMPRE o lead pelo nome quando o souberes.
+- UMA pergunta em toda a resposta, e uma so. Duas perguntas na mesma mensagem
+  ("o que te chamou a atencao? ja apostas ou queres comecar?") e um
+  interrogatorio: ele responde a uma e esquece a outra, e tu ficas sem saber
+  qual. Escolhe a que interessa agora e guarda a outra para o turno seguinte.
+- Trata o lead pelo nome quando ele estiver no contexto ("como o tratas"). Se
+  la nao houver nome, NAO inventes um nem uses a alcunha do perfil: fala com
+  ele sem nome nenhum, que e o que uma pessoa faz.
+- Quando cumprimentares, usa o cumprimento que vem na diretriz (bom dia, boa
+  tarde ou boa noite). Tu nao sabes que horas sao na Suica; esse valor sabe.
 - Sem markdown, sem titulos, sem bullets, sem assinatura, sem emoji a mais
   (no maximo um, e so quando encaixa).
 - PROIBIDO o travessao ("—") e a meia-risca ("–") a ligar ideias, e proibido o
@@ -368,6 +377,8 @@ export function buildDirectiveBlock(
   const returning = returningRule(incoming, directive.stage);
 
   return `[DIRETRIZ INTERNA — NAO MOSTRES AO LEAD]
+CUMPRIMENTO CERTO PARA AGORA (hora da Suica): ${saudacaoAgora()}. Se esta
+mensagem comecar com um cumprimento, e este. Nao uses outro.
 ${phase ? `${phase}\n` : ''}${returning}\n${postponement ? `${postponement}\n` : ''}${knownRule ? `${knownRule}\n` : ''}Nome do lead: ${lead.firstName ?? 'desconhecido'}
 Estagio do funil: ${directive.stage}
 Perfil do lead: ${directive.profile} — ${PROFILE_GUIDANCE[directive.profile]}

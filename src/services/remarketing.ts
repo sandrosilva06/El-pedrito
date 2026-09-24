@@ -52,7 +52,30 @@ sem queixume por ele nao ter respondido ao primeiro.`,
       'Boas {nome}! O grupo continua a bater certo e guardei-te o acesso. Bora lá tratar disso para entrares no ritmo com a malta?',
     ],
   },
+  {
+    brief: `Toque persistente: este lead ja levou dois toques e continua sem
+entrar. Continua a insistir, todos os dias, mas MUDA o angulo de cada vez — a
+mesma mensagem repetida nao convence ninguem, so ensina a ignorar. Angulos:
+as entradas de hoje, a malta que ja esta dentro, o acesso continuar
+reservado${env.GIVEAWAY_CLAIM ? `, e o passatempo (${env.GIVEAWAY_CLAIM}) a que ele fica a concorrer se entrar` : ''}.
+Curto, directo, sem queixume por ele nao ter respondido as anteriores.
+PROIBIDO prometer lucro ou inventar numeros${env.GIVEAWAY_CLAIM ? '' : ', e PROIBIDO falar de sorteios, premios ou passatempos: nao ha nenhum configurado'}.`,
+    fallbacks: [
+      'Boas {nome}! As entradas de hoje já estão a sair no VIP. O teu acesso continua à espera, queres que te passe os detalhes?',
+      '{nome}, tudo bem? A malta lá dentro está a seguir as de hoje. Ainda vais a tempo, é só dizeres.',
+      'Boas {nome}! Continuo com o teu lugar guardado no grupo. Queres tratar disso hoje?',
+    ],
+  },
 ];
+
+/**
+ * Quantos guioes diferentes ha para quem nao converteu.
+ *
+ * Do terceiro toque em diante repete-se o ultimo, que e o persistente e foi
+ * escrito para isso: muda de angulo a cada envio em vez de dizer sempre o
+ * mesmo.
+ */
+export const TOQUE_PERSISTENTE = NAO_CONVERTIDO_TOUCHES.length - 1;
 
 /**
  * Guioes dos disparos manuais da caixa de entrada.
@@ -106,9 +129,9 @@ const FALLBACK_SCRIPTS: Record<RemarketingAudience, string[]> = {
     '{nome}, tudo bem? Só para saber se a página abriu. Se precisares, faço o registo contigo passo a passo.',
   ],
   vip: [
-    'Boas {nome}! Como e que te esta a correr ai dentro? Tens conseguido entrar em todas as que mandamos?',
-    '{nome}, tudo bem? Diz-me la como te tem corrido. E importante nao saltares nenhuma entrada, e no conjunto que a coisa bate certo.',
-    'Tudo fixe {nome}? Ja mandamos as de hoje. Da la um salto e entra em todas, que saltar uma e onde a malta se estraga.',
+    'Boas {nome}! Vou lançar as entradas de hoje no grupo daqui a pouco. Dá lá um salto para não perderes nenhuma.',
+    '{nome}, tudo bem? O grupo tem estado a bater certo. Vai ao VIP ver as de hoje, é no conjunto que a coisa funciona.',
+    'Tudo fixe {nome}? Já estão a sair entradas no grupo. Aparece por lá, que saltar entradas é onde a malta se estraga.',
   ],
   promessa: [
     'Boas malandro, ja saiste do trabalho? As apostas da noite saem daqui a bocado no VIP, estas pronto para abrires a conta e entrares?',
@@ -124,14 +147,12 @@ recusar, travou em alguma coisa: ou a pagina nao abriu, ou perdeu-se no
 registo. A mensagem pergunta o que aconteceu e oferece ajuda concreta, passo a
 passo. PROIBIDO falar de deposito, de valores ou de urgencia: o que falta saber
 e onde ele parou. Uma pergunta so, facil de responder.`,
-  vip: `Estes leads ja estao no grupo VIP e foram aprovados por mim. A mensagem
-faz duas coisas, nesta ordem: PERGUNTA como lhes esta a correr la dentro, e
-lembra que e para seguir TODAS as entradas, sem saltar nenhuma, porque o
-resultado vem do conjunto e nao de uma aposta escolhida a dedo. Tom de
-companheiro que acompanha, nada de vendas — estas pessoas ja compraram. Uma
-pergunta so, facil de responder. PROIBIDO prometer lucro, inventar numeros de
-acerto ou dizer que nao se perde nenhuma: o que se pede e que ele siga o
-metodo, nao que ele confie num resultado.`,
+  vip: `Estes leads JA DEPOSITARAM e estao no grupo. A mensagem avisa que vao
+sair entradas no grupo, fala de como o grupo tem andado a acertar, e manda-o
+ir la ver. Tom de companheiro, nada de vendas — estas pessoas ja compraram.
+Lembra tambem, quando encaixar, que e para seguir TODAS as entradas: o
+resultado vem do conjunto e nao de uma escolhida a dedo. PROIBIDO prometer
+lucro, inventar numeros de acerto ou dizer que nao se perde nenhuma.`,
   promessa: `Este lead disse que tratava do assunto a esta hora e tu ficaste de
 lhe apitar. A mensagem e o cumprimento desse combinado, nao uma cobranca:
 lembra que ficou combinado, pergunta se ele ja tem um bocadinho, e refere que

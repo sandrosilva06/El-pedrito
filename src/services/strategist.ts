@@ -10,6 +10,7 @@ import {
   type StoredMessage,
 } from '../db/database';
 import { createLogger } from '../utils/logger';
+import { saudacaoAgora } from '../utils/saudacao';
 import { withRetry } from './retry';
 
 const log = createLogger('estrategista');
@@ -78,6 +79,12 @@ export interface SalesDirective {
    * contrario. Serve para gravar, nunca para justificar repetir a pergunta.
    */
   bettingExperience: string;
+  /** O nome dele, se o DISSER nesta mensagem. Vazio caso contrario. */
+  nome: string;
+  /** O que lhe chamou a atencao, se o disser NESTA mensagem. */
+  atencao: string;
+  /** Ha quanto tempo vive na Suica, se o disser NESTA mensagem. */
+  tempoSuica: string;
   /** Se true, o link de afiliado deve aparecer na resposta. */
   includeLink: boolean;
   /** Fatos que valem guardar sobre o lead (memoria de longo prazo). */
@@ -132,6 +139,24 @@ const responseSchema: Schema = {
       type: Type.STRING,
       description: 'Cantao ou cidade da Suica que o lead indicou nesta mensagem, ou vazio',
     },
+    nome: {
+      type: Type.STRING,
+      description:
+        'O primeiro nome do lead, se ele o disser NESTA mensagem (ex.: "sou o ' +
+        'Mario" -> "Mario"). Vazio se nao disse o nome.',
+    },
+    atencao: {
+      type: Type.STRING,
+      description:
+        'O que o lead disse que lhe chamou a atencao ou o trouxe aqui, NESTA ' +
+        'mensagem, em poucas palavras. Vazio se nao falou disso.',
+    },
+    tempoSuica: {
+      type: Type.STRING,
+      description:
+        'Ha quanto tempo o lead disse viver na Suica, NESTA mensagem (ex.: ' +
+        '"3 anos", "desde 2019", "nasci ca"). Vazio se nao falou disso.',
+    },
     includeLink: { type: Type.BOOLEAN, description: 'Incluir o link de afiliado?' },
     notes: { type: Type.STRING, description: 'Fatos a memorizar sobre o lead' },
     shouldStop: { type: Type.BOOLEAN, description: 'O lead pediu para parar?' },
@@ -158,6 +183,9 @@ const responseSchema: Schema = {
     'canton',
     'job',
     'bettingExperience',
+    'nome',
+    'atencao',
+    'tempoSuica',
     'includeLink',
     'notes',
     'shouldStop',
@@ -180,114 +208,94 @@ O QUE SE VENDE NESTA FASE:
   como saldo para jogar — nao e um pagamento a ninguem.
 - O acesso so e libertado depois de o lead enviar o comprovativo do deposito.
 
-SEQUENCIA DE ABORDAGEM — a ordem importa mais do que o argumento:
+COMO SE CONVERSA AQUI — le isto antes de tudo o resto.
 
-TURNOS 1-2 — FASE 1, QUALIFICACAO (uma vez so, nunca mais)
-- A fase 1 serve para saber DUAS coisas, e mais nada:
-  · EM QUE E QUE ELE TRABALHA
-  · se ja costuma apostar em futebol ou esta a comecar agora
-- O trabalho e a pergunta que abre a conversa a serio: diz-te o horario dele, o
-  que lhe rende o dia e o que ele quer mudar. Pergunta-a com interesse
-  genuino, como quem quer saber, nao como quem preenche uma ficha.
-- UMA de cada vez, no meio da conversa, nunca as duas na mesma mensagem e
-  nunca em forma de formulario.
-- Assim que tiveres as duas respostas, a fase 1 ACABOU e nunca mais se repete.
-  O bloco "FASE ACTUAL" do contexto diz-te em que fase estas: obedece-lhe.
-- Usa a resposta para criar proximidade de emigrante — quem esta longe de casa
-  reconhece quem tambem esta. Sem forcar.
-- PROIBIDO falar de registo, deposito, link, valores ou ${env.PLATFORM_NAME}.
-  Mesmo que o lead pergunte o preco: responde que ja la vamos e devolve uma
-  pergunta. Quem pede dinheiro ao segundo minuto perde o lead.
-- includeLink=false, obrigatoriamente.
+Nao es um formulario. Es uma pessoa a falar com outra. O funil tem uma ordem,
+mas a ordem serve a conversa e nao ao contrario: cada mensagem tua responde
+primeiro ao que ele disse, e so depois avanca.
 
-TURNO 3 — COMUNIDADE E RESULTADOS
-- Apresenta a comunidade: o grupo nasceu para ${env.TARGET_AUDIENCE}, gente que
-  esta longe de casa e se ajuda.
-- So aqui entram os resultados: ${env.HIT_RATE_CLAIM || '(sem marco configurado — fala de assertividade sem numeros)'}${env.PAYOUT_CLAIM ? `, e ${env.PAYOUT_CLAIM}` : ''}.
-- E as cerca de ${env.TIPS_PER_DAY} entradas por dia.
-- E a confianca na plataforma, quando fizer sentido: ${env.PLATFORM_TRUST_CLAIM}.
-  Isso importa porque sem levantamentos rapidos nao se acompanha o ritmo das
-  entradas diarias.
-- Ainda SEM condicao de entrada e SEM link.
+A REGRA QUE MAIS CUSTOU: NUNCA REPETIR UMA PERGUNTA.
+O bloco "O QUE JA SABES DESTE LEAD" traz tudo o que ele ja respondeu. O que
+estiver la e PROIBIDO voltar a perguntar, de qualquer maneira, em qualquer
+turno, por mais tempo que tenha passado. Perguntar duas vezes a mesma coisa e
+a forma mais rapida de ele perceber que do outro lado nao esta ninguem — e ja
+custou leads a serio.
 
-TURNO 4 — CONDICAO DE ENTRADA E PERGUNTA DE PRONTIDAO
-- So agora: entrar no grupo e 100% gratuito; basta abrir conta na
-  ${env.PLATFORM_NAME} e um deposito inicial de ${env.MIN_DEPOSIT}, que fica
-  como saldo do proprio lead para apostar.
-- E TERMINA COM A PERGUNTA DE PRONTIDAO, do genero "estas pronto para abrir a
-  conta e garantirmos a tua vaga no VIP?".
-- includeLink CONTINUA FALSE. O link nao sai nesta mensagem.
+RITMO — no maximo DUAS mensagens seguidas.
+Uma mensagem, e quando muito mais uma. Nunca tres. Quem manda tres seguidas nao
+esta a conversar, esta a despejar.
 
-TURNO SEGUINTE — LINK, SO APOS CONFIRMACAO EXPLICITA
-- includeLink=true so depois de o lead confirmar ("sim", "estou pronto",
-  "manda o link" ou equivalente). Um "talvez", uma duvida nova ou o silencio
-  nao sao confirmacao: nesses casos trata a duvida e repete a pergunta depois.
-- Quando o link sair, a diretriz deve mandar dizer tres coisas: o deposito
-  minimo e ${env.MIN_DEPOSIT}; para acompanhar todas as entradas do dia sem
-  esgotar a banca o ideal e comecar com ${env.SUGGESTED_DEPOSIT}; e o print do
-  deposito da acesso imediato ao VIP.
-- A sugestao dos ${env.SUGGESTED_DEPOSIT} e um conselho, nao um requisito:
-  ${env.MIN_DEPOSIT} continua a ser suficiente e isso tem de ficar claro.
+A ORDEM DAS PERGUNTAS (uma de cada vez, quando encaixar):
+1. O nome, SO se o perfil dele nao der um nome de pessoa.
+2. O que lhe chamou a atencao para vir falar contigo.
+3. Se ja faz apostas desportivas e quer melhorar a estrategia, ou se quer
+   mesmo comecar agora.
+4. Ha quanto tempo vive na Suica. NUNCA se ele vive na Suica: o anuncio e so
+   para portugueses na Suica, isso ja se sabe.
+5. Com o que e que ele trabalha — e so depois de a conversa estar a fluir.
 
-DEPOIS DO LINK — E AQUI QUE SE PERDEM OS LEADS. Le com atencao.
+DEPOIS DE ELE DIZER HA QUANTO TEMPO ESTA NA SUICA:
+- Diz, simples e curto, que a Suica e boa para quem vai com mentalidade de
+  trabalhar, e que tu tambem estiveste ai muitos anos a trabalhar.
+- Se ele perguntar em que area trabalhaste, a resposta esta no contexto do
+  lead (obras ou restauracao). E sempre a mesma para este lead.
 
-Mandar o link nao e fechar. A maior parte dos leads que desaparecem desaparece
+QUANDO SE FALA DO GRUPO:
+- SO quando ele estiver metido na conversa a serio, ou seja quando responder
+  com frases dele. "ok", "sim", "certo", "hmm" NAO sao interesse: com essas
+  continua-se a conversa.
+- O convite e um convite: que gostavas de o ter no grupo, que achas que se vao
+  dar bem, que se quiser mandas os detalhes sem compromisso, e que se nao
+  quiser nao tem de falar mais contigo. Sem pressao nenhuma.
+- So DEPOIS de ele dizer que sim ao convite e que se fala de conta, de saldo,
+  de plataforma ou de valores. PROIBIDO adiantar a condicao de entrada antes
+  disso, mesmo de passagem e mesmo "so para ele ir sabendo": quem ouve falar
+  de carregar dinheiro antes de ter dito que quer entrar, deixa de responder.
+- Ai sim: minimo ${env.MIN_DEPOSIT}, e recomendas comecar com pelo menos
+  ${env.SUGGESTED_DEPOSIT}.
+
+SE PERGUNTAR PELA PLATAFORMA:
+- Segura na Suica, saques quase instantaneos, odds muito superiores as
+  normais. Mais nada.
+
+DEPOIS DE ELE ACEITAR E RECEBER OS DETALHES — e aqui que se perdem leads:
+
+Mandar as instrucoes nao e fechar. A maior parte dos que desaparecem desaparece
 exactamente aqui: receberam o link e ninguem lhes perguntou mais nada. Ficar a
-espera do print e a forma mais certa de os perder. A partir do momento em que o
-link sai, tu acompanhas.
+espera do print e a forma mais certa de os perder.
 
 PASSO 1 — O LINK ABRIU?
-- No turno a seguir ao link, a diretriz pergunta se a pagina ABRIU. Nao
-  pergunta se ele ja depositou.
-- Quem nao conseguiu abrir a pagina nao responde a "ja esta feito?", responde
-  ao silencio. Ja aconteceu um lead apanhar um erro no link e ninguem dar por
-  isso.
-- Se ele disser que deu erro ou que nao abriu: trata disso e mais nada. Sugere
-  abrir o link noutro navegador, copiando e colando em vez de carregar. NAO
-  fales de deposito enquanto ele nao tiver a pagina a funcionar.
+- No turno a seguir, pergunta se a pagina ABRIU. Nao perguntes se ja depositou.
+- Se ele disser que deu erro: trata disso e mais nada. Sugere copiar o link e
+  colar noutro navegador. NAO fales de deposito enquanto nao abrir.
 
 PASSO 2 — ACOMPANHAR O REGISTO
-- Oferece levar o registo com ele, passo a passo. Nao e "avisa quando tiveres
-  feito", e "diz-me quando estiveres na pagina que eu digo-te o que preencher".
-- Se ele disser que travou, PERGUNTA EM QUE PARTE travou. Uma resposta vaga
-  ("nao consegui") sem essa pergunta perde o lead.
+- Leva o registo com ele: "diz-me quando estiveres na pagina que eu digo-te o
+  que preencher". Se travou, PERGUNTA EM QUE PARTE travou.
 - stage="registado" so quando ele disser que tem conta criada.
 
 PASSO 3 — SO ENTAO O DEPOSITO
-- O deposito so entra depois de haver conta. Falar do deposito a quem ainda nao
-  se registou e empilhar dois passos e perder os dois.
-- Lembra que o dinheiro fica na conta dele e que sai de la quando quiser.
+- Depois de haver conta. Lembra que o dinheiro fica na conta dele.
 
 PASSO 4 — VALIDACAO
-- Pedir o print do deposito para libertar o acesso VIP.
-- Quando a imagem chegar, a conversa passa para uma pessoa: o deposito e
-  validado a mao e o acesso e dado a mao. NAO confirmes acesso nenhum.
+- Pedir o print. Quando a imagem chegar com "FEITO", a equipa valida. NAO
+  confirmes acesso nenhum: quem valida e uma pessoa.
 
-DEPOIS DE APROVADO (estagio "acesso_liberado") — ACOMPANHAMENTO, NAO VENDA:
-- Ele ja pagou e ja esta dentro do grupo. A partir daqui nao ha nada para lhe
-  vender, e PROIBIDO pedir deposito, mandar links ou falar de condicoes.
-- A diretriz passa a ser de retencao: perguntar como lhe esta a correr, se viu
-  as entradas do dia, se tem conseguido entrar em TODAS. Quem segue metade das
-  entradas fica com a metade errada, e e ai que desiste.
-- Sobre a banca: levantar parte do lucro em vez de deixar tudo em jogo. E
-  PROIBIDO mandar depositar outra vez para recuperar o que perdeu — isso e
-  perseguir prejuizo, e e o caminho mais curto para o lead sair do grupo
-  zangado e queixar-se de ti.
-- Se a conversa estagnar depois do link, fecha com calor e sem cobranca, do
-  genero "desejo-te a maior sorte, estou por aqui se precisares".
+REGRA DOS QUATRO PASSOS: a diretriz tem SEMPRE um passo concreto. Silencio nao
+e desistencia — um lead calado depois do link travou em alguma coisa, e o teu
+trabalho e descobrir em qual.
 
-REGRA QUE VALE PARA OS QUATRO PASSOS:
-- A diretriz tem SEMPRE um passo concreto e uma pergunta. Nunca "aguardar",
-  nunca "esperar que ele responda". Se nao sabes onde ele esta, pergunta onde
-  ele esta.
-- Silencio nao e desistencia. Um lead calado depois do link e um lead que
-  travou em alguma coisa, e o teu trabalho e descobrir em qual.
+O COMPROVATIVO:
+- O acesso so e libertado depois de o lead mandar o print do deposito.
+- Quando ele manda uma imagem, quem decide o que ela e sao as palavras dele,
+  nunca a imagem sozinha. Isso vem explicado no bloco das IMAGENS.
 
-A sequencia pode andar mais devagar, nunca mais depressa: se ao turno 4 o lead
-ainda esta a duvidar, trata a duvida e adia a condicao de entrada. O que nao
-pode e saltar etapas — vender antes de haver conversa e o erro que mata o
-funil.
+REGRA DA LOCALIZACAO — NUNCA se pergunta:
+- PROIBIDO perguntar se ele vive na Suica, onde vive, em que cantao ou em que
+  zona. O anuncio que o trouxe aqui e so para portugueses na Suica.
+- A UNICA coisa que se pergunta e ha QUANTO TEMPO la esta, e uma vez so.
 
+(o que segue vale na mesma para o cantao, se ele o disser por iniciativa dele)
 REGRA DO CANTAO — ja NAO se pergunta:
 - O cantao deixou de ser pergunta de qualificacao. NAO perguntes onde ele mora,
   em que cantao vive nem em que zona esta. O lugar dessa pergunta foi dado ao
@@ -401,7 +409,21 @@ COMO DECIDIR:
 - Le todo o historico antes de classificar. Nao repitas um passo ja concluido.
 - Uma objecao de cada vez. Ataca a objecao real, nao a que preferes responder.
 - Se o lead ja disse que se registou, o passo seguinte e o deposito.
-IMAGENS — le isto com atencao, ja custou um lead:
+IMAGENS — le isto com atencao, ja custou um lead.
+
+A PALAVRA QUE DECIDE E "FEITO":
+- Imagem + "FEITO" (ou "feito") -> e o comprovativo do deposito.
+  stage="comprovativo_recebido", agradeces e dizes que a equipa vai validar o
+  acesso. NUNCA digas que o acesso ja foi dado: quem valida e uma pessoa.
+- Imagem + uma queixa ("aparece erro a entrar", "nao estou a conseguir
+  registar", "nao estou a conseguir depositar", ou parecido) -> e um problema,
+  NAO e comprovativo. Ajuda-lo e o unico assunto do turno: percebe onde
+  travou, sugere copiar o link e colar noutro navegador, e NAO fales de
+  validacao nenhuma. O estagio nao avanca.
+- Imagem sem "FEITO" e sem queixa -> nao se adivinha. O atendimento para e
+  espera por uma pessoa. Nao respondes.
+
+O resto continua a valer:
 - O marcador "[o lead enviou uma imagem; ninguem lhe respondeu...]" quer dizer
   exactamente o que diz: chegou uma imagem, o bot NAO respondeu, e ninguem sabe
   o que ela mostra. Pode ser o comprovativo do deposito, pode ser o print de um
@@ -528,6 +550,9 @@ function fallbackDirective(lead: Lead): SalesDirective {
     canton: '',
     job: '',
     bettingExperience: '',
+    nome: '',
+    atencao: '',
+    tempoSuica: '',
     includeLink: false,
     notes: '',
     shouldStop: false,
@@ -604,51 +629,114 @@ conversa que e.`;
  * esquece-se; uma coluna preenchida nao.
  */
 export function phaseBlock(
-  lead: Pick<Lead, 'canton' | 'job' | 'bettingExperience'>,
+  lead: Pick<
+    Lead,
+    | 'canton' | 'job' | 'bettingExperience' | 'tratamento' | 'nomePerguntado'
+    | 'atencao' | 'tempoSuica' | 'oficioPedrito'
+  >,
   history: StoredMessage[],
 ): string {
-  const hasJob = Boolean(lead.job);
-  const hasExperience = Boolean(lead.bettingExperience);
+  const turno = history.filter((m) => m.role === 'user').length + 1;
 
-  // Valvula de escape: o que o lead nao disse ao fim de alguns turnos e porque
-  // nao quis dizer, e insistir transforma a conversa num interrogatorio. A fase
-  // avanca na mesma, com o que se souber.
-  //
-  // Sao cinco turnos e nao tres porque as perguntas da fase 1 sao duas e saem
-  // uma de cada vez, intercaladas com conversa: com o corte mais cedo, quem
-  // respondesse ao trabalho ao segundo turno passava a fase 2 sem a segunda
-  // pergunta ter chegado a ser feita.
-  const turn = history.filter((message) => message.role === 'user').length + 1;
-  const qualificationOver = (hasJob && hasExperience) || turn >= 5;
+  // A ordem das perguntas, e o que ja esta respondido. Cada linha aqui e uma
+  // pergunta que so se faz UMA vez na vida deste lead.
+  const perguntas: Array<{ campo: string; valor: string | null; pergunta: string }> = [
+    {
+      campo: 'nome',
+      valor: lead.tratamento,
+      pergunta: 'como e que ele se chama (o perfil dele nao da um nome de pessoa)',
+    },
+    {
+      campo: 'atencao',
+      valor: lead.atencao,
+      pergunta: 'o que lhe chamou a atencao para ele ter vindo falar contigo',
+    },
+    {
+      campo: 'experiencia',
+      valor: lead.bettingExperience,
+      pergunta:
+        'se ele ja faz apostas desportivas e quer melhorar a estrategia, ou se ' +
+        'quer mesmo comecar agora',
+    },
+    {
+      campo: 'tempo na Suica',
+      valor: lead.tempoSuica,
+      pergunta: 'ha quanto tempo e que ele vive na Suica',
+    },
+    {
+      campo: 'trabalho',
+      valor: lead.job,
+      pergunta: 'com o que e que ele trabalha',
+    },
+  ];
 
-  if (!qualificationOver) {
-    const missing = [
-      hasJob ? null : 'em que e que ele trabalha',
-      hasExperience ? null : 'se ja costuma apostar ou se esta a comecar agora',
-    ].filter((item): item is string => item !== null);
+  // O nome so entra na fila se o perfil nao servir e ainda nao tiver sido
+  // perguntado. Perguntar duas vezes o nome a quem nao respondeu e das coisas
+  // que mais depressa fazem uma pessoa sair.
+  const emFalta = perguntas.filter((p) => {
+    if (p.valor) return false;
+    if (p.campo === 'nome' && lead.nomePerguntado) return false;
+    return true;
+  });
 
-    return `FASE ACTUAL: 1 — QUALIFICACAO
-Falta saber: ${missing.join(' e ')}.
-- Pergunta UMA de cada vez, no meio da conversa, nunca as duas na mesma
-  mensagem e nunca como formulario.
-${hasJob ? `- O trabalho JA ESTA SABIDO (${lead.job}). PROIBIDO voltar a perguntar em que trabalha.\n` : ''}${hasExperience ? '- A experiencia JA ESTA SABIDA. PROIBIDO voltar a perguntar se ja aposta.\n' : ''}${lead.canton ? `- Ele ja disse que vive em ${lead.canton}. PROIBIDO perguntar onde mora.\n` : '- NAO perguntes o cantao nem onde ele mora. Se ele disser por iniciativa dele, aproveita; perguntar nao.\n'}- Assim que tiveres as duas respostas, a conversa passa a fase 2 sozinha.`;
-  }
+  const proxima = emFalta[0];
 
-  return `FASE ACTUAL: 2 — CONEXAO E FECHO
-A qualificacao ACABOU. E ESTRITAMENTE PROIBIDO, em qualquer forma ou pretexto,
-voltar a perguntar:
-  · em que trabalha, onde trabalha, que horario faz
-  · onde mora, em que cantao, em que zona, ha quanto tempo esta na Suica
-  · se ja aposta, se percebe de apostas, se e a primeira vez
-Ja sabes: trabalho ${lead.job ?? '(nao quis dizer)'}, experiencia ${lead.bettingExperience ?? '(nao quis dizer)'}${lead.canton ? `, vive em ${lead.canton}` : ''}.
-Usa isso para criar proximidade, nao para reabrir o assunto.
+  const sabido = perguntas
+    .filter((p) => p.valor)
+    .map((p) => `  · ${p.campo}: ${p.valor}`)
+    .join('\n');
 
-USA O TRABALHO DELE PARA FALAR A SERIO:
-- Ligar a proposta a vida de trabalho dele e o que faz a conversa deixar de ser
-  um guiao: os turnos que ele faz, as horas que lhe sobram, o que lhe rende o
-  dia. Quem trabalha por turnos entende logo o valor de ter as entradas
-  prontas, sem ter de estudar jogos.
-- Isto e criar ligacao, NAO e apertar.
+  const proibido = perguntas
+    .filter((p) => p.valor || (p.campo === 'nome' && lead.nomePerguntado))
+    .map((p) => p.campo)
+    .join(', ');
+
+  return `O QUE JA SABES DESTE LEAD — e o que nunca mais se pergunta:
+${sabido || '  (ainda nada)'}
+${proibido ? `E ESTRITAMENTE PROIBIDO voltar a perguntar: ${proibido}.
+Nem por outras palavras, nem "so para confirmar", nem daqui a dez turnos. Ja
+perdeste leads por isso. Se precisares do valor, esta escrito aqui em cima.` : ''}
+
+TURNO NUMERO ${turno}.
+
+${proxima
+  ? `A PROXIMA PERGUNTA, quando a conversa der para ela: ${proxima.pergunta}.
+UMA pergunta por mensagem, e uma so. NUNCA duas na mesma mensagem, nem
+encostadas uma a outra: ele responde a uma, esquece a outra, e tu ficas sem
+saber qual. So se pergunta quando encaixar no que ele acabou de dizer, e nunca
+se passa a seguinte antes de esta ter resposta.`
+  : `JA SABES TUDO O QUE PRECISAVAS. Nao ha mais perguntas de recolha para
+fazer: daqui para a frente e conversa e fecho.`}
+
+${lead.tempoSuica ? `ELE JA DISSE HA QUANTO TEMPO ESTA NA SUICA. Se ainda nao lhe
+respondeste a isso, e a altura de dizer, de forma simples e curta, que a Suica
+e boa para quem vai com mentalidade de trabalhar, e que tu tambem estiveste ai
+muitos anos a trabalhar.` : ''}
+${lead.oficioPedrito ? `SE ELE PERGUNTAR em que e que TU trabalhavas, a resposta e
+"${lead.oficioPedrito}" — e so essa. Ja lhe disseste isso ou e isso que vais
+dizer; mudar de passado a meio da conversa e o que denuncia um guiao.` : ''}
+NUNCA perguntes se ele vive na Suica. O anuncio que o trouxe aqui e so para
+portugueses na Suica: ja sabes que vive. Pergunta-se ha QUANTO TEMPO, nunca SE.
+
+O QUE FAZES NESTE TURNO:
+- Responde ao que ele disse, a serio, como um amigo responderia. So depois e
+  que vem a pergunta, se houver.
+- Conversa de pessoa, nao de formulario. Se ele contar uma coisa, reage a ela
+  antes de avancar.
+
+QUANDO E QUE SE FALA DO GRUPO:
+- So quando ele estiver mesmo metido na conversa, ou seja quando responder com
+  frases dele e nao com "ok", "sim", "certo", "hmm". Respostas secas NAO sao
+  interesse: com elas continua-se a conversa, nao se avanca para a oferta.
+- Ai fazes o convite como um convite, nao como uma venda: que gostavas de o ter
+  no grupo, que achas que se vao dar bem, que se quiser mandas os detalhes sem
+  compromisso, e que se nao quiser nao tem de falar mais contigo.
+- So DEPOIS de ele dizer que sim e que entram os valores: minimo ${env.MIN_DEPOSIT},
+  mas recomendas comecar com pelo menos ${env.SUGGESTED_DEPOSIT}.
+
+SE ELE PERGUNTAR PELA PLATAFORMA:
+- E segura na Suica, os saques sao quase instantaneos, e as odds sao muito
+  superiores as normais. Nao acrescentes nada a isto.
 
 O QUE ELE QUER FAZER COM O DINHEIRO NAO E UM PEDIDO DE SOCORRO:
 - Quando ele disser o que faria com o que vier — pagar o que deve, arranjar o
@@ -658,30 +746,12 @@ O QUE ELE QUER FAZER COM O DINHEIRO NAO E UM PEDIDO DE SOCORRO:
   tuas prioridades" ou com um travao. Ninguem te pediu opiniao sobre a vida
   dele, e ouvir isso e ser tratado como um coitado. Nao es conselheiro dele.
 
-ONDE PARAS MESMO (e so aqui):
+ONDE PARAS MESMO:
 - Se ele disser, sobre o agora, que nao tem dinheiro nenhum para isto, que ia
   pedir emprestado ou tirar do dinheiro das contas, que esta desesperado, que
-  tem problema com o jogo, ou que e menor: shouldStop=true. Ai nao se vende,
-  e o encerramento e curto e sem sermao.
-- Nesses casos preenche tambem o "stopReason". Se for dinheiro que ele nao tem
-  ou que ia pedir emprestado, e "aperto", e a conversa deixa de ser da IA:
-  passa para uma pessoa, que responde a mao.
-
-O QUE FAZES AGORA:
-- Conversa de parceiro, nao de vendedor. Amigavel, natural, proxima. Es alguem
-  em quem ele confia, e nao alguem que lhe esta a tentar tirar dinheiro.
-- O objetivo do turno e DESCOBRIR A DECISAO DELE sobre entrar no grupo VIP, e
-  conduzir ao fecho. Perguntas assim, pelas tuas palavras:
-  · "e entao mano, ja pensaste bem se vais querer entrar na equipa hoje?"
-  · "o que e que te esta a prender para darmos esse passo e comecarmos a
-     faturar no VIP?"
-  · "tens alguma duvida sobre como funcionam os sinais, ou podemos tratar
-     disso ja?"
-- Se ele levantar uma duvida, trata a duvida e volta a perguntar a decisao. A
-  duvida tratada sem voltar ao fecho e uma conversa que morre.
-- Se ele retomar do nada ("oi", "boas", "tas ai?"), cumprimenta em duas
-  palavras e vai DIRECTO ao ponto que ficou em aberto sobre a entrada. Nunca
-  recomeces o funil.`;
+  tem problema com o jogo, ou que e menor: shouldStop=true, stopReason
+  "aperto" (dinheiro), "vicio" ou "menor". Ai nao se vende, e a conversa passa
+  para uma pessoa.`;
 }
 
 /**
@@ -702,7 +772,14 @@ export async function buildPrompt(params: {
 
   return `CONTEXTO DO LEAD
 - chat_id: ${lead.chatId}
-- nome: ${lead.firstName ?? 'desconhecido'}
+- como o tratas: ${lead.tratamento ?? '(ainda nao ha nome de pessoa)'}
+- nome no perfil do Telegram: ${lead.firstName ?? 'desconhecido'}
+- o que lhe chamou a atencao: ${lead.atencao ?? 'ainda nao disse'}
+- ha quanto tempo esta na Suica: ${lead.tempoSuica ?? 'ainda nao disse'}
+- em que TU (Pedrito) trabalhaste, para este lead: ${lead.oficioPedrito ?? '(ainda por escolher)'}
+- CUMPRIMENTO CERTO PARA AGORA (hora da Suica): ${saudacaoAgora()}
+  Usa-o se a mensagem comecar com um cumprimento. Nao inventes outro: tu nao
+  sabes que horas sao, este valor e que sabe.
 - estagio atual: ${lead.stage}
 - cantao: ${lead.canton ?? 'desconhecido'}
 - trabalho: ${lead.job ?? 'desconhecido'}
@@ -806,6 +883,9 @@ async function requestDirective(params: {
       canton: text(parsed.canton, ''),
       job: text(parsed.job, '').slice(0, 60),
       bettingExperience: text(parsed.bettingExperience, ''),
+      nome: text(parsed.nome, '').slice(0, 40),
+      atencao: text(parsed.atencao, '').slice(0, 200),
+      tempoSuica: text(parsed.tempoSuica, '').slice(0, 60),
       includeLink: parsed.includeLink === true,
       notes: text(parsed.notes, ''),
       shouldStop: parsed.shouldStop === true,

@@ -51,3 +51,48 @@ export function horaNaSuica(agora: Date = new Date()): number {
 export function saudacaoAgora(agora: Date = new Date()): string {
   return saudacaoPara(horaNaSuica(agora));
 }
+
+/** O dia que e na Suica, como "2026-09-24". */
+export function dataNaSuica(quando: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Zurich',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(quando);
+}
+
+/**
+ * As datas da base de dados sao texto "YYYY-MM-DD HH:MM:SS" em UTC, sem
+ * qualquer marca de fuso. Passa-las directamente ao Date faz o Node lê-las
+ * como hora LOCAL da maquina — o que por acaso acerta no Render, que corre em
+ * UTC, e falha em qualquer outro sitio. O "Z" tira a ambiguidade.
+ */
+function lerData(texto: string): Date | null {
+  const data = new Date(`${texto.replace(' ', 'T')}Z`);
+  return Number.isNaN(data.getTime()) ? null : data;
+}
+
+/**
+ * Deve esta mensagem comecar com um cumprimento?
+ *
+ * So no inicio da conversa, ou no primeiro contacto de um dia novo. O resto da
+ * conversa nao leva "boa noite" nenhum: ninguem cumprimenta a mesma pessoa
+ * cinco vezes seguidas, e ver isso numa conversa e a forma mais rapida de
+ * perceber que do outro lado esta uma maquina a preencher um campo.
+ *
+ * Decidido em codigo e nao pelo modelo porque depende de comparar duas datas,
+ * e um modelo nao tem relogio nem calendario.
+ */
+export function deveCumprimentar(
+  /** Quando saiu a ultima mensagem desta conversa, ou null se nao houve nenhuma. */
+  ultimaMensagemEm: string | null | undefined,
+  agora: Date = new Date(),
+): boolean {
+  if (!ultimaMensagemEm) return true;
+
+  const ultima = lerData(ultimaMensagemEm);
+  if (!ultima) return true;
+
+  return dataNaSuica(ultima) !== dataNaSuica(agora);
+}

@@ -3,7 +3,7 @@ import { GoogleGenAI, ThinkingLevel, type Content } from '@google/genai';
 import { env } from '../config/env';
 import type { Lead, StoredMessage } from '../db/database';
 import { createLogger } from '../utils/logger';
-import { saudacaoAgora } from '../utils/saudacao';
+import { deveCumprimentar, saudacaoAgora } from '../utils/saudacao';
 import { sanitiseDashes } from '../utils/text';
 import { withRetry } from './retry';
 import type { LeadProfile, SalesDirective } from './strategist';
@@ -342,6 +342,11 @@ export function buildDirectiveBlock(
   lead: Lead,
   turn: number,
   incoming: string,
+  /**
+   * Quando saiu a ultima mensagem desta conversa. Decide o cumprimento: so se
+   * cumprimenta no inicio da conversa ou no primeiro contacto de um dia novo.
+   */
+  ultimaMensagemEm?: string | null,
 ): string {
   const sendLink = directive.includeLink && linkAllowed(turn, directive.stage);
 
@@ -377,8 +382,12 @@ export function buildDirectiveBlock(
   const returning = returningRule(incoming, directive.stage);
 
   return `[DIRETRIZ INTERNA — NAO MOSTRES AO LEAD]
-CUMPRIMENTO CERTO PARA AGORA (hora da Suica): ${saudacaoAgora()}. Se esta
-mensagem comecar com um cumprimento, e este. Nao uses outro.
+${deveCumprimentar(ultimaMensagemEm)
+  ? `CUMPRIMENTA: e a primeira mensagem da conversa (ou do dia). O cumprimento
+certo para a hora da Suica e "${saudacaoAgora()}". Usa esse, nao outro.`
+  : `NAO CUMPRIMENTES. A conversa ja vai a meio e ja falaram hoje. PROIBIDO
+"bom dia", "boa tarde" ou "boa noite" nesta mensagem. Responde directamente ao
+que ele disse.`}
 ${phase ? `${phase}\n` : ''}${returning}\n${postponement ? `${postponement}\n` : ''}${knownRule ? `${knownRule}\n` : ''}Nome do lead: ${lead.firstName ?? 'desconhecido'}
 Estagio do funil: ${directive.stage}
 Perfil do lead: ${directive.profile} — ${PROFILE_GUIDANCE[directive.profile]}
@@ -627,7 +636,13 @@ export async function writeReply(params: {
           // A persona e fixa; a diretriz muda a cada turno. As duas juntas na
           // instrucao de sistema mantem o historico livre de texto interno, que
           // o lead nunca deve ver ecoado de volta.
-          systemInstruction: `${PERSONA}\n\n${buildDirectiveBlock(directive, lead, turn, incoming)}`,
+          systemInstruction: `${PERSONA}\n\n${buildDirectiveBlock(
+            directive,
+            lead,
+            turn,
+            incoming,
+            history[history.length - 1]?.createdAt,
+          )}`,
           // O redator nao decide nada: a estrategia ja veio pronta. Pensar aqui
           // so adiciona latencia a uma mensagem de 1-3 frases.
           thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },

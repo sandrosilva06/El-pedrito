@@ -10,7 +10,7 @@ import {
   type StoredMessage,
 } from '../db/database';
 import { createLogger } from '../utils/logger';
-import { saudacaoAgora } from '../utils/saudacao';
+import { deveCumprimentar, saudacaoAgora } from '../utils/saudacao';
 import { withRetry } from './retry';
 
 const log = createLogger('estrategista');
@@ -126,8 +126,10 @@ const responseSchema: Schema = {
       type: Type.STRING,
       description:
         'Em que o lead disse trabalhar NESTA mensagem, em poucas palavras ' +
-        '(ex.: "construcao civil", "enfermeira", "restauracao"). Vazio se nao ' +
-        'falou do trabalho dele.',
+        '(ex.: "construcao civil", "enfermeira", "restauracao"). Se ele disser ' +
+        'que NAO trabalha, que esta desempregado ou que estuda, isso TAMBEM e ' +
+        'uma resposta: poe "nao trabalha", "desempregado" ou "estudante". So ' +
+        'fica vazio se ele nao falar do assunto de todo.',
     },
     bettingExperience: {
       type: Type.STRING,
@@ -628,30 +630,41 @@ conversa que e.`;
  * que fez o bot voltar a perguntar o cantao a quem ja o tinha dito. O modelo
  * esquece-se; uma coluna preenchida nao.
  */
-export function phaseBlock(
-  lead: Pick<
-    Lead,
-    | 'canton' | 'job' | 'bettingExperience' | 'tratamento' | 'nomePerguntado'
-    | 'atencao' | 'tempoSuica' | 'oficioPedrito'
-  >,
-  history: StoredMessage[],
-): string {
-  const turno = history.filter((m) => m.role === 'user').length + 1;
+/** O que o funil precisa de saber do lead, para decidir o que perguntar. */
+export type LeadComFactos = Pick<
+  Lead,
+  | 'canton' | 'job' | 'bettingExperience' | 'tratamento' | 'nomePerguntado'
+  | 'atencao' | 'tempoSuica' | 'oficioPedrito' | 'perguntasFeitas'
+>;
 
-  // A ordem das perguntas, e o que ja esta respondido. Cada linha aqui e uma
-  // pergunta que so se faz UMA vez na vida deste lead.
-  const perguntas: Array<{ campo: string; valor: string | null; pergunta: string }> = [
+/**
+ * As perguntas do funil, pela ordem em que se fazem.
+ *
+ * "chave" e o que fica guardado em perguntas_feitas quando a pergunta sai.
+ * "valor" e a resposta, quando houver. Uma pergunta sai da lista por QUALQUER
+ * uma das duas vias: ter resposta, ou ter sido feita.
+ */
+export function perguntasDoFunil(lead: LeadComFactos): Array<{
+  chave: string;
+  campo: string;
+  valor: string | null;
+  pergunta: string;
+}> {
+  return [
     {
+      chave: 'nome',
       campo: 'nome',
       valor: lead.tratamento,
       pergunta: 'como e que ele se chama (o perfil dele nao da um nome de pessoa)',
     },
     {
+      chave: 'atencao',
       campo: 'atencao',
       valor: lead.atencao,
       pergunta: 'o que lhe chamou a atencao para ele ter vindo falar contigo',
     },
     {
+      chave: 'experiencia',
       campo: 'experiencia',
       valor: lead.bettingExperience,
       pergunta:
@@ -659,35 +672,57 @@ export function phaseBlock(
         'quer mesmo comecar agora',
     },
     {
+      chave: 'tempo',
       campo: 'tempo na Suica',
       valor: lead.tempoSuica,
       pergunta: 'ha quanto tempo e que ele vive na Suica',
     },
     {
+      chave: 'trabalho',
       campo: 'trabalho',
       valor: lead.job,
       pergunta: 'com o que e que ele trabalha',
     },
   ];
+}
 
-  // O nome so entra na fila se o perfil nao servir e ainda nao tiver sido
-  // perguntado. Perguntar duas vezes o nome a quem nao respondeu e das coisas
-  // que mais depressa fazem uma pessoa sair.
-  const emFalta = perguntas.filter((p) => {
+/**
+ * A proxima pergunta a fazer, ou null se ja nao ha nenhuma.
+ *
+ * Uma pergunta sai da lista por ter RESPOSTA ou por ja ter sido FEITA. A
+ * segunda via e a que faltava: o lead respondeu "Nao trabalho bro", nada ficou
+ * guardado, e o bot voltou a perguntar em que area trabalhava.
+ */
+export function proximaPergunta(lead: LeadComFactos): { chave: string; pergunta: string } | null {
+  const feitas = new Set(lead.perguntasFeitas ?? []);
+
+  const emFalta = perguntasDoFunil(lead).filter((p) => {
     if (p.valor) return false;
-    if (p.campo === 'nome' && lead.nomePerguntado) return false;
+    if (feitas.has(p.chave)) return false;
+    // O nome tem a sua propria marca, anterior a esta lista.
+    if (p.chave === 'nome' && lead.nomePerguntado) return false;
     return true;
   });
 
-  const proxima = emFalta[0];
+  const primeira = emFalta[0];
+  return primeira ? { chave: primeira.chave, pergunta: primeira.pergunta } : null;
+}
+
+export function phaseBlock(lead: LeadComFactos, history: StoredMessage[]): string {
+  const turno = history.filter((m) => m.role === 'user').length + 1;
+  const perguntas = perguntasDoFunil(lead);
+  const feitas = new Set(lead.perguntasFeitas ?? []);
+
+  const proxima = proximaPergunta(lead);
 
   const sabido = perguntas
     .filter((p) => p.valor)
     .map((p) => `  · ${p.campo}: ${p.valor}`)
     .join('\n');
 
+  // Proibido o que ja tem resposta E o que ja foi perguntado sem resposta.
   const proibido = perguntas
-    .filter((p) => p.valor || (p.campo === 'nome' && lead.nomePerguntado))
+    .filter((p) => p.valor || feitas.has(p.chave) || (p.chave === 'nome' && lead.nomePerguntado))
     .map((p) => p.campo)
     .join(', ');
 
@@ -695,7 +730,11 @@ export function phaseBlock(
 ${sabido || '  (ainda nada)'}
 ${proibido ? `E ESTRITAMENTE PROIBIDO voltar a perguntar: ${proibido}.
 Nem por outras palavras, nem "so para confirmar", nem daqui a dez turnos. Ja
-perdeste leads por isso. Se precisares do valor, esta escrito aqui em cima.` : ''}
+perdeste leads por isso. Se precisares do valor, esta escrito aqui em cima.
+
+Alguns destes estao proibidos por JA TEREM SIDO PERGUNTADOS, mesmo sem
+resposta util — quem respondeu "nao trabalho" ou nao respondeu de todo ja disse
+o que tinha a dizer. Insistir so mostra que ninguem esta a ler.` : ''}
 
 TURNO NUMERO ${turno}.
 
@@ -777,9 +816,14 @@ export async function buildPrompt(params: {
 - o que lhe chamou a atencao: ${lead.atencao ?? 'ainda nao disse'}
 - ha quanto tempo esta na Suica: ${lead.tempoSuica ?? 'ainda nao disse'}
 - em que TU (Pedrito) trabalhaste, para este lead: ${lead.oficioPedrito ?? '(ainda por escolher)'}
-- CUMPRIMENTO CERTO PARA AGORA (hora da Suica): ${saudacaoAgora()}
-  Usa-o se a mensagem comecar com um cumprimento. Nao inventes outro: tu nao
-  sabes que horas sao, este valor e que sabe.
+${deveCumprimentar(history[history.length - 1]?.createdAt)
+  ? `- CUMPRIMENTA: esta e a primeira mensagem da conversa (ou do dia). O
+  cumprimento certo para a hora da Suica agora e "${saudacaoAgora()}". Usa esse
+  e nao outro: tu nao sabes que horas sao, este valor e que sabe.`
+  : `- NAO CUMPRIMENTES. A conversa ja vai a meio e ja houve mensagens hoje.
+  PROIBIDO comecar com "bom dia", "boa tarde" ou "boa noite" — ninguem
+  cumprimenta a mesma pessoa cinco vezes seguidas, e ver isso denuncia a
+  maquina. Responde directamente ao que ele disse.`}
 - estagio atual: ${lead.stage}
 - cantao: ${lead.canton ?? 'desconhecido'}
 - trabalho: ${lead.job ?? 'desconhecido'}

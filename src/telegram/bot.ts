@@ -16,6 +16,7 @@ import {
   setCanton,
   setHumanHandover,
   setJob,
+  marcarPerguntaFeita,
   setAtencao,
   setNomePerguntado,
   setOficioPedrito,
@@ -27,7 +28,7 @@ import {
   upsertLead,
   type Lead,
 } from '../db/database';
-import { planStrategy, type SalesDirective } from '../services/strategist';
+import { planStrategy, proximaPergunta, type SalesDirective } from '../services/strategist';
 import { splitIntoBubbles } from '../services/writer';
 import { writeReply } from '../services/writer';
 import { createLogger } from '../utils/logger';
@@ -639,6 +640,10 @@ async function runFunnelTurn(
       const history = await getRecentMessages(chatId);
       const current = await upsertLead({ chatId });
 
+      // Lida ANTES da cadeia: e a pergunta que o prompt vai mandar fazer, e e
+      // ela que se marca como feita no fim do turno.
+      const perguntaDoTurno = proximaPergunta(current);
+
       const directive = await planStrategy({ lead: current, history, incoming });
       const answer = await writeReply({ lead: current, history, incoming, directive });
 
@@ -686,6 +691,15 @@ async function runFunnelTurn(
       recordJob(chatId, current.job, directive);
       recordExperience(chatId, current.bettingExperience, incoming, directive);
       recordFactosNovos(chatId, current, directive);
+
+      // A pergunta que este turno tinha para fazer fica marcada como FEITA,
+      // tenha ele respondido ou nao. E o que garante que ela sai uma vez so:
+      // sem isto, um "nao trabalho bro" nao guardava nada no campo e a
+      // pergunta voltava no turno seguinte.
+      if (perguntaDoTurno) {
+        void marcarPerguntaFeita(chatId, perguntaDoTurno.chave);
+        if (perguntaDoTurno.chave === 'nome') void setNomePerguntado(chatId);
+      }
 
       if (directive.notes.trim().length > 0) {
         const merged = [current.notes, directive.notes.trim()]

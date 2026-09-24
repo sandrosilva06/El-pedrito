@@ -99,6 +99,15 @@ export interface Lead {
   /** "qualificado" (ja depositou) ou "nao_qualificado", posto por comando. */
   tag: string | null;
   /**
+   * As perguntas que ja lhe foram feitas, respondidas ou nao.
+   *
+   * Sem isto, uma pergunta sem resposta util voltava: o lead respondeu "Nao
+   * trabalho bro", nada ficou guardado no campo do trabalho, e o bot voltou a
+   * perguntar em que area trabalhava. Quem nao responde a primeira nao quer
+   * responder — insistir so mostra que ninguem esta a ler.
+   */
+  perguntasFeitas: string[];
+  /**
    * Em que trabalha, nas palavras dele. Null enquanto nao se souber.
    *
    * Ao contrario do cantao e da experiencia, nao ha detector em codigo: uma
@@ -204,6 +213,7 @@ interface LeadRow {
   tempo_suica: string | null;
   oficio_pedrito: string | null;
   tag: string | null;
+  perguntas_feitas: string | null;
   job: string | null;
   betting_experience: string | null;
   first_name: string | null;
@@ -409,6 +419,7 @@ const COLUNAS: Array<{ tabela: string; coluna: string; sqlite: string; postgres:
   { tabela: 'leads', coluna: 'tempo_suica', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'leads', coluna: 'oficio_pedrito', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'leads', coluna: 'tag', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'perguntas_feitas', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'messages', coluna: 'author', sqlite: "TEXT NOT NULL DEFAULT 'bot'", postgres: "TEXT NOT NULL DEFAULT 'bot'" },
   { tabela: 'messages', coluna: 'media_file_id', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'messages', coluna: 'media_kind', sqlite: 'TEXT', postgres: 'TEXT' },
@@ -513,6 +524,7 @@ function mapLead(row: LeadRow): Lead {
     tempoSuica: row.tempo_suica,
     oficioPedrito: row.oficio_pedrito,
     tag: row.tag,
+    perguntasFeitas: (row.perguntas_feitas ?? '').split(',').filter(Boolean),
     job: row.job,
     bettingExperience: row.betting_experience,
     firstName: row.first_name,
@@ -703,6 +715,17 @@ const SQL = {
      WHERE chat_id = ? AND (oficio_pedrito IS NULL OR oficio_pedrito = '')
   `,
   setNomePerguntado: 'UPDATE leads SET nome_perguntado = 1 WHERE chat_id = ?',
+  // Acrescenta a chave a lista sem a duplicar. Feito em SQL e nao em codigo
+  // para dois turnos em paralelo nao se sobreporem um ao outro.
+  marcarPergunta: `
+    UPDATE leads
+       SET perguntas_feitas = CASE
+             WHEN perguntas_feitas IS NULL OR perguntas_feitas = '' THEN ?
+             WHEN ',' || perguntas_feitas || ',' LIKE '%,' || ? || ',%' THEN perguntas_feitas
+             ELSE perguntas_feitas || ',' || ?
+           END
+     WHERE chat_id = ?
+  `,
   setIdentity: `
     UPDATE leads
        SET first_name = coalesce(?, first_name),
@@ -1455,6 +1478,17 @@ export async function setBettingExperience(chatId: number, experience: string): 
 /** Como se trata o lead. A primeira vez que se souber e a que fica. */
 export async function setTratamento(chatId: number, nome: string): Promise<void> {
   await conn().run(SQL.setTratamento, [nome.slice(0, 40), chatId]);
+}
+
+/**
+ * Marca uma pergunta como FEITA, tenha ela tido resposta util ou nao.
+ *
+ * E o que garante que cada pergunta sai uma vez so. O campo do facto guarda a
+ * RESPOSTA; este guarda que a pergunta chegou a ser feita — e sao coisas
+ * diferentes quando o lead responde "nao trabalho".
+ */
+export async function marcarPerguntaFeita(chatId: number, chave: string): Promise<void> {
+  await conn().run(SQL.marcarPergunta, [chave, chave, chave, chatId]);
 }
 
 /** Marca que o nome ja foi perguntado, mesmo que ele nao responda. */

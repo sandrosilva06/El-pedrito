@@ -18,7 +18,11 @@ import { createLogger } from './utils/logger';
 const log = createLogger('arranque');
 
 async function main(): Promise<void> {
-  if (env.BACKUP_ENABLED) {
+  // Com Postgres nao ha ficheiro nenhum para repor: os dados ja estao fora do
+  // contentor. Tentar repor escrevia um SQLite que ninguem le, e falhava com
+  // ENOENT a cada arranque — um ERROR no log que nao e erro nenhum e que so
+  // serve para esconder os que sao.
+  if (env.BACKUP_ENABLED && !env.usaPostgres) {
     try {
       await restoreFromChannel(new Api(env.TELEGRAM_BOT_TOKEN), env.TELEGRAM_BOT_TOKEN);
     } catch (error) {

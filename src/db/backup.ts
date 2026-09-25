@@ -48,6 +48,11 @@ function destino(): number | null {
  * telegram/bot.ts ja importa a base de dados.
  */
 export async function backupDatabase(api: Api): Promise<boolean> {
+  // Com Postgres isto teria mandado para o canal um ficheiro SQLite vazio, de
+  // hora a hora, com ar de backup. Pior que nao ter rede de seguranca nenhuma
+  // e ter uma que parece existir: descobria-se no dia de a usar.
+  if (env.usaPostgres) return false;
+
   const chat = destino();
 
   if (chat === null) {
@@ -103,6 +108,8 @@ function checkpoint(): void {
  * ficaria com o ficheiro velho aberto por baixo dos pes.
  */
 export async function restoreFromChannel(api: Api, token: string): Promise<boolean> {
+  if (env.usaPostgres) return false;
+
   const chat = destino();
   if (chat === null || env.databaseFile === ':memory:') return false;
 

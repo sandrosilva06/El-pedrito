@@ -358,6 +358,15 @@ export type Env = Omit<
   /** Producao sem URL publica: nao da para registrar webhook e o bot fica mudo. */
   missingPublicUrlInProduction: boolean;
   /**
+   * A base de dados vive fora do contentor, num Postgres.
+   *
+   * Decide muito mais do que o dialecto do SQL: com Postgres, o ficheiro
+   * SQLite deixa de existir e tudo o que foi construido a volta dele — o
+   * backup para o canal, o restauro no arranque, o aviso do disco efemero —
+   * deixa de fazer sentido e passa a mentir.
+   */
+  usaPostgres: boolean;
+  /**
    * A base de dados esta num caminho que nao sobrevive a um deploy.
    *
    * No Render o sistema de ficheiros do contentor e descartado a cada deploy:
@@ -365,6 +374,9 @@ export type Env = Omit<
    * remarketing desaparecem sem erro nenhum, e o funil recomeca do zero sem
    * ninguem dar por isso. Um erro silencioso destes custa a base de leads
    * inteira, por isso e dito em voz alta no arranque e no /health.
+   *
+   * Com DATABASE_URL isto e sempre falso: o caminho do SQLite continua
+   * definido, mas nao e usado por ninguem.
    */
   databaseIsEphemeral: boolean;
   /** A caixa de entrada esta utilizavel: ha palavra-passe suficientemente longa. */
@@ -528,7 +540,9 @@ function load(): Env {
     // 12 caracteres e o minimo para isto nao ser adivinhavel. Abaixo disso a
     // caixa fica desligada em vez de ficar fraca.
     inboxEnabled: (value.ADMIN_PASSWORD ?? '').length >= 12,
+    usaPostgres: Boolean(value.DATABASE_URL),
     databaseIsEphemeral:
+      !value.DATABASE_URL &&
       databaseFile !== ':memory:' &&
       !path.relative(process.cwd(), databaseFile).startsWith('..'),
     vipLeads: parseVipLeads(value.VIP_CHAT_IDS),

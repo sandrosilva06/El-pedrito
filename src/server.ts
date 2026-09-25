@@ -38,7 +38,8 @@ app.disable('x-powered-by');
  * do webhook — e sem isso a unica pista fica presa nos logs da plataforma.
  */
 const storage = {
-  databaseFile: env.databaseFile,
+  /** Onde os dados estao mesmo: o ficheiro so conta quando nao ha Postgres. */
+  databaseFile: env.usaPostgres ? 'postgres' : env.databaseFile,
   /** true = os dados nao sobrevivem ao proximo deploy. */
   ephemeral: env.databaseIsEphemeral,
 };
@@ -257,7 +258,13 @@ async function start(): Promise<void> {
 
   // Backup periodico para o canal. Enquanto nao houver disco persistente, e o
   // que fica entre um deploy e perder tudo outra vez.
-  if (env.BACKUP_ENABLED) {
+  //
+  // Com Postgres nao corre, e nao se anuncia: os dados ja vivem fora do
+  // contentor, e uma linha no log a prometer backups de hora a hora deixava
+  // ficar a ideia de que havia dois sitios com os leads quando so ha um.
+  if (env.usaPostgres) {
+    log.info('backup para o canal desligado: a base de dados e Postgres e ja vive fora do servico');
+  } else if (env.BACKUP_ENABLED) {
     const intervalo = env.BACKUP_INTERVAL_MINUTES * 60 * 1000;
     backupTimer = setInterval(() => void backupDatabase(bot.api), intervalo);
     backupTimer.unref();

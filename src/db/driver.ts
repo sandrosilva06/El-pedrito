@@ -150,49 +150,129 @@ class SqliteDriver implements Driver {
   }
 }
 
+/**
+ * A ligacao morreu por baixo dos pes, e a query nem chegou a correr.
+ *
+ * O pooler do Supabase fecha ligacoes paradas sem avisar ninguem, e o pool
+ * continua a entregar o cliente morto a quem pedir a seguir. Visto em
+ * producao, varias vezes por dia:
+ *
+ *   ERROR [agendador] falha ao enviar lembretes de promessa
+ *         error: terminating connection due to administrator command
+ *
+ * Nestes casos o servidor cortou ANTES de executar seja o que for, por isso
+ * repetir nao duplica nada — e a unica classe de erro do Postgres de que isso
+ * se pode dizer com seguranca. Tudo o resto (chave duplicada, sintaxe, uma
+ * restricao violada) sobe como sempre.
+ */
+function ligacaoMorreu(error: unknown): boolean {
+  const e = error as { code?: string; message?: string } | null;
+  if (!e) return false;
+
+  // 57P01 admin shutdown, 57P02 crash shutdown, 57P03 cannot connect now,
+  // 08006/08003/08000 falhas de ligacao.
+  if (e.code && ['57P01', '57P02', '57P03', '08006', '08003', '08000'].includes(e.code)) {
+    return true;
+  }
+
+  // O node-postgres mata o cliente antes de haver codigo de erro quando o
+  // socket cai a meio: so fica a mensagem.
+  return /Connection terminated|Client has encountered a connection error|socket hang up/i.test(
+    e.message ?? '',
+  );
+}
+
 /** Postgres, por rede, com um pool de ligacoes. */
 class PostgresDriver implements Driver {
   readonly dialect = 'postgres' as const;
 
+  /**
+   * `dentroDeTransacao` distingue o driver do pool do driver preso a UMA
+   * ligacao. Dentro de uma transacao nao se repete nada: a ligacao que morreu
+   * levou o BEGIN com ela, e repetir uma query solta escrevia-a fora da
+   * transacao. Essa sobe para quem chamou, que faz ROLLBACK e desiste.
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  constructor(private readonly pool: any) {}
+  constructor(private readonly pool: any, private readonly dentroDeTransacao = false) {}
+
+  /** Corre a query, e repete UMA vez se a ligacao tiver morrido antes de correr. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async query(sql: string, params?: unknown[]): Promise<any> {
+    try {
+      return await this.pool.query(sql, params);
+    } catch (error) {
+      if (this.dentroDeTransacao || !ligacaoMorreu(error)) throw error;
+
+      // A segunda tentativa vai buscar outra ligacao ao pool. Se essa tambem
+      // estiver morta, o erro sobe: duas seguidas ja nao e uma ligacao velha,
+      // e uma terceira tentativa so atrasava a noticia.
+      log.warn('ligacao a base de dados caiu antes da query; a repetir uma vez');
+      return await this.pool.query(sql, params);
+    }
+  }
 
   async all<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-    const result = await this.pool.query(toPostgres(sql), params);
+    const result = await this.query(toPostgres(sql), params);
     return result.rows as T[];
   }
 
   async get<T>(sql: string, params: unknown[] = []): Promise<T | undefined> {
-    const result = await this.pool.query(toPostgres(sql), params);
+    const result = await this.query(toPostgres(sql), params);
     return result.rows[0] as T | undefined;
   }
 
   async run(sql: string, params: unknown[] = []): Promise<RunResult> {
-    const result = await this.pool.query(toPostgres(sql), params);
+    const result = await this.query(toPostgres(sql), params);
     return { changes: Number(result.rowCount ?? 0) };
   }
 
   async exec(sql: string): Promise<void> {
     // O exec leva DDL, que pode trazer varias instrucoes de uma vez. Nao passa
     // pela traducao de marcadores: nao ha parametros em DDL.
-    await this.pool.query(sql);
+    await this.query(sql);
   }
 
   async transaction<T>(run: (tx: Driver) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
 
+    // Enquanto a ligacao esta emprestada, o pool deixa de ouvir os erros dela:
+    // quem a tem na mao e que responde. Sem este ouvinte, uma ligacao que morra
+    // a meio de uma transacao emite 'error' sem ninguem a ouvir — e um 'error'
+    // sem ouvintes DERRUBA O PROCESSO.
+    //
+    // Nao e hipotese: o pooler do Supabase fecha ligacoes, o funil grava as
+    // mensagens dentro de uma transacao, e o servico inteiro ia abaixo por uma
+    // ligacao cortada. Aqui o erro fica registado e a transacao falha sozinha,
+    // como qualquer outra.
+    let morreu = false;
+    const aoErrar = (erro: unknown) => {
+      morreu = true;
+      log.warn('ligacao caiu a meio de uma transacao; vai ser desfeita', erro);
+    };
+    client.on('error', aoErrar);
+
     try {
       await client.query('BEGIN');
       // O driver que vai para dentro esta preso a ESTA ligacao, senao as
-      // queries de dentro da transacao saiam por outra do pool.
-      const result = await run(new PostgresDriver(client));
+      // queries de dentro da transacao saiam por outra do pool. E marcado como
+      // tal para nao repetir queries: dentro de uma transacao, repetir numa
+      // ligacao nova escrevia por fora dela.
+      const result = await run(new PostgresDriver(client, true));
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK').catch(() => undefined);
+      if (!morreu && !ligacaoMorreu(error)) {
+        // Numa ligacao morta o ROLLBACK so daria outro erro; o servidor ja
+        // desfez tudo ao cortar.
+        await client.query('ROLLBACK').catch(() => undefined);
+      }
       throw error;
     } finally {
-      client.release();
+      client.off('error', aoErrar);
+      // Uma ligacao que morreu nao volta para o pool: devolve-la punha-a outra
+      // vez em circulacao, para partir a query de outra pessoa. O argumento do
+      // release manda o pool deita-la fora e abrir uma nova.
+      client.release(morreu ? new Error('ligacao morta') : undefined);
     }
   }
 
@@ -234,9 +314,26 @@ export async function openDriver(params: {
         ? false
         : { rejectUnauthorized: false },
       max: 5,
-      idleTimeoutMillis: 30_000,
+      // Mais curto do que o corte do pooler do Supabase: assim somos nos a
+      // fechar as ligacoes paradas, em vez de descobrirmos que ele as fechou
+      // na query seguinte.
+      idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 10_000,
+      // Mantem o socket vivo em ligacoes com pouco transito; sem isto ha
+      // caminhos de rede que as cortam em silencio.
+      keepAlive: true,
     });
+
+    // Sem este ouvinte, um erro numa ligacao PARADA do pool nao tem quem o
+    // apanhe — e um 'error' sem ouvintes num EventEmitter derruba o processo.
+    // O funil inteiro ia abaixo porque o pooler fechou uma ligacao que ninguem
+    // estava a usar.
+    (pool as { on: (evento: string, fn: (erro: unknown) => void) => void }).on(
+      'error',
+      (erro: unknown) => {
+        log.warn('ligacao parada do pool caiu (o pool repoe-a sozinho)', erro);
+      },
+    );
 
     log.info('base de dados: Postgres');
     return new PostgresDriver(pool);

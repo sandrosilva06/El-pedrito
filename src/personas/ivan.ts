@@ -122,13 +122,17 @@ ONDE PARAS MESMO (e so aqui):
 - Na duvida entre sonho e aperto, pergunta pelo objetivo dele e segue. So
   paras com o que ele disser claramente.
 
-REGRA DO CANTAO — le o campo "cantao" do CONTEXTO DO LEAD:
-- Se tiver um valor, o lead JA DISSE onde mora. PROIBIDO voltar a perguntar,
-  de qualquer forma. Usa o que ja sabes.
-- Se estiver "desconhecido" e for turno 1 ou 2, podes perguntar UMA vez.
-- A partir do turno 3 desiste: ele nao quis dizer, e insistir num dado que
-  evitou transforma a conversa num interrogatorio.
-- Preenche o campo "canton" da diretriz so quando ele indicar a localizacao
+REGRA DA CIDADE — le o campo "cidade" do CONTEXTO DO LEAD:
+- O teu publico e portugues a viver EM PORTUGAL. Perguntas em que CIDADE ele
+  vive, e mais nada sobre onde mora. Nunca perguntes o pais, nunca perguntes o
+  cantao, nunca assumas que ele esta fora de Portugal.
+- Se o campo tiver um valor, o lead JA DISSE onde mora. PROIBIDO voltar a
+  perguntar, de qualquer forma e por outras palavras. Usa o que ja sabes.
+- Se estiver "ainda nao disse", podes perguntar UMA vez, quando a lista de
+  perguntas do bloco de fase te mandar. Nunca por tua iniciativa e nunca duas.
+- Se ele nao responder, esta arrumado: ele nao quis dizer, e insistir num dado
+  que evitou transforma a conversa num interrogatorio.
+- Preenche o campo "canton" da diretriz com a cidade, so quando ele a indicar
   nesta mensagem.
 
 CONTINUIDADE — o funil NUNCA recomeca:
@@ -137,7 +141,7 @@ CONTINUIDADE — o funil NUNCA recomeca:
 - PROIBIDO repetir perguntas de abertura a quem ja avancou: "o que te trouxe
   ao grupo", "queres mudar de vida", "o que fazes da vida", saudacoes de
   primeira mensagem. Quem ja respondeu uma vez nao responde outra.
-- Se ele ja disse o cantao e responde outra coisa ("ya", "fixe", "es top"),
+- Se ele ja disse a cidade e responde outra coisa ("ya", "fixe", "es top"),
   avanca para o passo seguinte.
 - MENSAGENS DE PRESENCA ("tas ai?", "estas ai?", "ola?", "boas?", "ainda ai
   andas?"): nao sao um turno novo do funil. A diretriz e confirmar que esta la,
@@ -413,11 +417,10 @@ vai para o lead.`;
 /**
  * As perguntas do Ivan, pela ordem em que se fazem.
  *
- * NADA a ver com as do El Pedrito, e e esse o ponto: ele nao pergunta o cantao
- * nem ha quanto tempo o lead esta na Suica, porque o funil dele nao e de
- * emigrantes. Pergunta o que o traz aqui, o que ele quer da vida, e se ja tem
- * conta na casa principal — que e o que decide se o manda registar ou se lhe
- * oferece as outras.
+ * NADA a ver com as do El Pedrito, e e esse o ponto. O publico do Ivan e
+ * portugues a viver EM PORTUGAL, nao emigrantes: ele pergunta a cidade e nao o
+ * cantao, e nunca ha quanto tempo o lead esta fora. O resto — o que o traz aqui,
+ * o que ele quer da vida — e o que da para conversar com ele.
  *
  * Reaproveita as colunas que ja existem: `atencao` guarda o que o trouxe,
  * `job` o que ele faz, `bettingExperience` se ja joga. Colunas novas so quando
@@ -442,6 +445,16 @@ function perguntasDoIvan(lead: LeadComFactos): PerguntaFunil[] {
       campo: 'experiencia com casinos',
       valor: lead.bettingExperience,
       pergunta: 'se ja joga em casinos online ou se nunca experimentou',
+    },
+    {
+      // A coluna chama-se `canton` por ter nascido no funil do El Pedrito, que
+      // e suico. Aqui guarda a CIDADE: o publico do Ivan e portugues a viver em
+      // Portugal. Renomear a coluna obrigava a mexer na base de dados de
+      // producao para ganhar so um nome melhor.
+      chave: 'cidade',
+      campo: 'cidade onde vive',
+      valor: lead.canton,
+      pergunta: 'em que cidade e que ele vive',
     },
     {
       chave: 'objetivo',
@@ -506,11 +519,14 @@ function faseDoIvan(lead: LeadComFactos, history: StoredMessage[]): string {
  *
  * Reaproveita as colunas que ja existem, com os nomes que fazem sentido no funil
  * dele: `atencao` e o que o trouxe, `job` e o que ele quer da vida,
- * `bettingExperience` e se ja joga. Nao ha cantao nem tempo na Suica aqui — isso
- * e do outro influencer.
+ * `bettingExperience` e se ja joga, e `canton` guarda a CIDADE (o nome da coluna
+ * vem do funil suico do El Pedrito; renomea-la so por causa do nome obrigava a
+ * mexer na base de dados de producao). Nao ha tempo na Suica aqui — isso e do
+ * outro influencer.
  */
 function contextoDoIvan(lead: Lead): string {
   return [
+    `- cidade: ${lead.canton ?? 'ainda nao disse'}`,
     `- o que o trouxe: ${lead.atencao ?? 'ainda nao disse'}`,
     `- experiencia com casinos: ${lead.bettingExperience ?? 'ainda nao disse'}`,
     `- o que ele quer da vida: ${lead.job ?? 'ainda nao disse'}`,
@@ -525,6 +541,31 @@ export const ivan: Persona = {
   writerPersona: PERSONA,
 
   contextoDoLead: contextoDoIvan,
+
+  /**
+   * A cidade, tal como o lead a disse.
+   *
+   * Nao ha tabela de cidades portuguesas e nao vale a pena inventar uma: sao
+   * centenas, com grafias e freguesias pelo meio, e uma lista incompleta
+   * recusava "Vila Nova de Famalicao" e deixava o campo vazio. Fica o que a
+   * diretriz leu da mensagem, limpo e curto.
+   *
+   * So a diretriz e nao a mensagem crua: sem tabela, ler a mensagem diretamente
+   * gravava "nao sei" ou "aqui perto" como se fossem cidades.
+   */
+  lerLocalidade(_incoming, daDiretriz) {
+    const cidade = (daDiretriz ?? '').trim();
+    if (cidade.length < 2 || cidade.length > 60) return null;
+    // O modelo devolve coisas destas quando o lead nao disse nada. Gravar uma
+    // delas era pior do que nao gravar: o contexto passava a afirmar que ele
+    // vive em "desconhecido", e a pergunta nunca mais voltava a sair.
+    if (/^(desconhecid[oa]|nao sei|não sei|sei la|sei lá|nenhum[ao]?|sem|n\/?a|null|-)$/i
+      .test(cidade)) {
+      return null;
+    }
+    return cidade;
+  },
+
   perguntas: perguntasDoIvan,
   blocoDeFase: faseDoIvan,
 

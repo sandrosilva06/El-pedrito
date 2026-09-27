@@ -82,6 +82,20 @@ export interface Persona {
   contextoDoLead(lead: Lead): string;
 
   /**
+   * Onde o lead vive, lido da mensagem dele ou do que a diretriz devolveu.
+   *
+   * Varia porque o publico varia: o El Pedrito fala com portugueses na SUICA e
+   * quer o cantao, com nome canonico; o Ivan fala com portugueses EM PORTUGAL e
+   * quer a cidade. Uma leitura so, com a tabela dos cantoes, nunca reconhecia
+   * "Porto" — a pergunta saia da lista por ter sido feita, mas o contexto
+   * continuava a dizer que ele nao tinha respondido. O lead diz onde mora e o
+   * bot fica a achar que nao sabe.
+   *
+   * Devolve null quando nao ha nada de util na mensagem.
+   */
+  lerLocalidade(incoming: string, daDiretriz: string | null): string | null;
+
+  /**
    * Preparacao de um lead novo, se este influencer precisar de alguma.
    *
    * Existe por causa do oficio do El Pedrito, escolhido a sorte uma vez por lead

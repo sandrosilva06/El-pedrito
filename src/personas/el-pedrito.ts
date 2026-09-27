@@ -12,6 +12,7 @@
 import { env } from '../config/env';
 import { setOficioPedrito } from '../db/database';
 import type { Lead, RemarketingAudience, StoredMessage } from '../db/database';
+import { detectCanton } from '../utils/canton';
 import { isReturningMarker } from '../services/writer';
 import { proximaPerguntaDe } from './types';
 import type { LeadComFactos, Persona, PerguntaFunil } from './types';
@@ -779,6 +780,17 @@ export const elPedrito: Persona = {
   writerPersona: PERSONA,
 
   contextoDoLead: contextoDoElPedrito,
+
+  /**
+   * O cantao, pelo nome canonico.
+   *
+   * A leitura em codigo tem prioridade sobre o que o modelo devolveu: a tabela
+   * da sempre "Zurique", enquanto o modelo tanto pode dizer "zurich" como "ZH".
+   */
+  lerLocalidade(incoming, daDiretriz) {
+    return detectCanton(incoming) ?? detectCanton(daDiretriz ?? '');
+  },
+
   perguntas: perguntasDoFunil,
   blocoDeFase: phaseBlock,
   prepararLead: escolherOficio,

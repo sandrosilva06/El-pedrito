@@ -463,19 +463,21 @@ bot.command('stats', async (ctx) => {
  */
 async function recordCanton(
   chatId: number,
+  persona: Persona,
   known: string | null,
   incoming: string,
   directive: SalesDirective,
 ): Promise<void> {
   if (known) return;
 
-  // A leitura em codigo tem prioridade: devolve o nome canonico do cantao,
-  // enquanto o modelo tanto pode devolver "Zurique" como "zurich" ou "ZH".
-  const detected = detectCanton(incoming) ?? detectCanton(directive.canton);
+  // Quem le e a persona: o El Pedrito quer o cantao pelo nome canonico, o Ivan
+  // quer a cidade tal como o lead a disse. A mesma leitura para os dois nunca
+  // reconhecia "Porto".
+  const detected = persona.lerLocalidade(incoming, directive.canton);
   if (!detected) return;
 
-  await setCanton(chatId, PERSONA, detected);
-  log.info(`cantao registado chat=${chatId} -> ${detected}`);
+  await setCanton(chatId, persona.id, detected);
+  log.info(`localidade registada chat=${chatId} (${persona.id}) -> ${detected}`);
 }
 
 /**
@@ -722,7 +724,7 @@ async function runFunnelTurn(
 
       await advanceStage(chatId, idPersona, directive.shouldStop ? 'perdido' : directive.stage);
       recordPromise(chatId, directive);
-      recordCanton(chatId, current.canton, incoming, directive);
+      recordCanton(chatId, persona, current.canton, incoming, directive);
       recordJob(chatId, current.job, directive);
       recordExperience(chatId, current.bettingExperience, incoming, directive);
       recordFactosNovos(chatId, current, directive);

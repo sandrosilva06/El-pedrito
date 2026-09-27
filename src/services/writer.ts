@@ -363,7 +363,16 @@ function splitSentences(text: string): string[] {
  * resultar num testamento, por isso os blocos compridos sao partidos por
  * frases — a instrucao de prompt e uma preferencia, esta funcao e a garantia.
  */
-export function splitIntoBubbles(text: string, maxBubbles: number): string[] {
+export function splitIntoBubbles(
+  text: string,
+  maxBubbles: number,
+  /**
+   * Acima deste comprimento vale a pena partir o bloco por frases. Vem da
+   * persona: o Ivan escreve aos gritos curtos e o El Pedrito em frases
+   * inteiras, e um numero unico para os dois estragava um dos registos.
+   */
+  maxChars: number = LONG_BUBBLE_CHARS,
+): string[] {
   const blocks = text
     .split(/\n\s*\n/)
     .map((block) => block.trim())
@@ -372,7 +381,7 @@ export function splitIntoBubbles(text: string, maxBubbles: number): string[] {
   const expanded: string[] = [];
 
   for (const block of blocks) {
-    if (block.length <= LONG_BUBBLE_CHARS) {
+    if (block.length <= maxChars) {
       expanded.push(block);
       continue;
     }
@@ -385,7 +394,7 @@ export function splitIntoBubbles(text: string, maxBubbles: number): string[] {
       // parece alguem a escrever, parece uma falha.
       const candidate = buffer ? `${buffer} ${sentence}` : sentence;
 
-      if (candidate.length > LONG_BUBBLE_CHARS && buffer) {
+      if (candidate.length > maxChars && buffer) {
         expanded.push(buffer);
         buffer = sentence;
       } else {

@@ -595,6 +595,25 @@ async function escolherOficio(lead: Lead): Promise<void> {
   await setOficioPedrito(lead.chatId, 'el_pedrito', oficio);
 }
 
+/**
+ * As linhas de contexto do El Pedrito.
+ *
+ * O TEXTO de cada linha e o mesmo que estava no strategist.ts. O que mudou foi a
+ * ordem: as tres de baixo (cantao, trabalho, experiencia) vinham depois do bloco
+ * do cumprimento e agora vem junto das outras, porque a persona so tem um sitio
+ * para as escrever. E informacao identica, junta em vez de separada.
+ */
+function contextoDoElPedrito(lead: Lead): string {
+  return [
+    `- o que lhe chamou a atencao: ${lead.atencao ?? 'ainda nao disse'}`,
+    `- ha quanto tempo esta na Suica: ${lead.tempoSuica ?? 'ainda nao disse'}`,
+    `- em que TU (Pedrito) trabalhaste, para este lead: ${lead.oficioPedrito ?? '(ainda por escolher)'}`,
+    `- cantao: ${lead.canton ?? 'desconhecido'}`,
+    `- trabalho: ${lead.job ?? 'desconhecido'}`,
+    `- experiencia com apostas: ${lead.bettingExperience ?? 'desconhecida'}`,
+  ].join('\n');
+}
+
 export const elPedrito: Persona = {
   id: 'el_pedrito',
   agentName: env.AGENT_NAME,
@@ -602,6 +621,7 @@ export const elPedrito: Persona = {
   strategistSystem: SYSTEM_INSTRUCTION,
   writerPersona: PERSONA,
 
+  contextoDoLead: contextoDoElPedrito,
   perguntas: perguntasDoFunil,
   blocoDeFase: phaseBlock,
   prepararLead: escolherOficio,
@@ -612,8 +632,9 @@ export const elPedrito: Persona = {
   defaultLink: env.AFFILIATE_LINK,
 
   maxBubbles: env.MAX_BUBBLES,
-  // Frases inteiras, ao contrario do registo de rua do Ivan.
-  maxBubbleChars: 220,
+  // 200 e o valor que o motor usava como constante para todos: mantem-se, para
+  // o ritmo do El Pedrito ficar exactamente o que era.
+  maxBubbleChars: 200,
 
   minDeposit: env.MIN_DEPOSIT,
   suggestedDeposit: env.SUGGESTED_DEPOSIT,

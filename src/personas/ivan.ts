@@ -14,7 +14,7 @@ import { env } from '../config/env';
 import { forceMediumSkinTone, limitEmojis } from '../utils/emoji';
 import { proximaPerguntaDe } from './types';
 import type { LeadComFactos, Persona, PersonaHouse, PerguntaFunil } from './types';
-import type { StoredMessage } from '../db/database';
+import type { Lead, StoredMessage } from '../db/database';
 
 const houses: PersonaHouse[] = [
   { id: 'plan_bet', label: 'Plan Bet', link: env.PLANBET_LINK },
@@ -501,6 +501,22 @@ function faseDoIvan(lead: LeadComFactos, history: StoredMessage[]): string {
 }
 
 
+/**
+ * As linhas de contexto do Ivan.
+ *
+ * Reaproveita as colunas que ja existem, com os nomes que fazem sentido no funil
+ * dele: `atencao` e o que o trouxe, `job` e o que ele quer da vida,
+ * `bettingExperience` e se ja joga. Nao ha cantao nem tempo na Suica aqui — isso
+ * e do outro influencer.
+ */
+function contextoDoIvan(lead: Lead): string {
+  return [
+    `- o que o trouxe: ${lead.atencao ?? 'ainda nao disse'}`,
+    `- experiencia com casinos: ${lead.bettingExperience ?? 'ainda nao disse'}`,
+    `- o que ele quer da vida: ${lead.job ?? 'ainda nao disse'}`,
+  ].join('\n');
+}
+
 export const ivan: Persona = {
   id: 'ivan',
   agentName: env.IVAN_NAME,
@@ -508,6 +524,7 @@ export const ivan: Persona = {
   strategistSystem: STRATEGIST_SYSTEM,
   writerPersona: PERSONA,
 
+  contextoDoLead: contextoDoIvan,
   perguntas: perguntasDoIvan,
   blocoDeFase: faseDoIvan,
 

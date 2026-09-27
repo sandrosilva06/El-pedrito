@@ -41,6 +41,7 @@ import { nextOccurrenceUtc } from '../utils/timezone';
 import { canalParaChat, registarCanal, type Canal } from './canal';
 import { type IdPersona } from '../personas/ids';
 import { personaDe } from '../personas';
+import type { Persona } from '../personas/types';
 
 const log = createLogger('telegram');
 
@@ -263,6 +264,8 @@ async function typeFor(ctx: Context, totalMs: number): Promise<void> {
  */
 async function sendHumanPaced(
   ctx: Context,
+  /** Quem esta a falar: decide quantas bolhas e com que comprimento. */
+  persona: Persona,
   text: string,
   /**
    * Verificado antes de cada balao. A entrega demora dezenas de segundos, e
@@ -274,7 +277,11 @@ async function sendHumanPaced(
   // Ultima barreira antes do Telegram. O redator ja limpa o que gera, mas por
   // aqui passa tambem texto que ele nao escreveu — o aviso legal, o link e as
   // mensagens fixas vindas do ambiente.
-  const bubbles = splitIntoBubbles(sanitiseDashes(text), env.MAX_BUBBLES);
+  // O guarda de estilo da persona corre aqui e nao so na saida do redator: por
+  // aqui passa tambem texto que o modelo nao escreveu — o link, o aviso legal,
+  // as mensagens fixas. As regras de emoji do Ivan valem para essas tambem.
+  const limpo = persona.styleGuard ? persona.styleGuard(sanitiseDashes(text)) : sanitiseDashes(text);
+  const bubbles = splitIntoBubbles(limpo, persona.maxBubbles, persona.maxBubbleChars);
 
   for (const [index, bubble] of bubbles.entries()) {
     if (shouldAbort?.()) {
@@ -586,7 +593,7 @@ function dispatchMessage(ctx: Context, chatId: number, text: string): void {
       return;
     }
 
-    await sendHumanPaced(ctx, text, () => currentGeneration(chatId) !== generation);
+    await sendHumanPaced(ctx, personaDe(PERSONA), text, () => currentGeneration(chatId) !== generation);
   }).catch((error: unknown) => {
     log.error(`falha ao entregar mensagem ao chat ${chatId}`, error);
   });
@@ -605,7 +612,7 @@ function dispatchFunnelTurn(
   ctx: Context,
   chatId: number,
   incoming: string,
-  options: { storeIncoming: boolean },
+  options: { storeIncoming: boolean; persona?: IdPersona },
 ): void {
   void runFunnelTurn(ctx, chatId, incoming, options).catch((error: unknown) => {
     log.error(`falha no turno do chat ${chatId}`, error);
@@ -616,8 +623,15 @@ async function runFunnelTurn(
   ctx: Context,
   chatId: number,
   incoming: string,
-  options: { storeIncoming: boolean },
+  options: { storeIncoming: boolean; persona?: IdPersona },
 ): Promise<void> {
+  // Quem esta a falar. Por omissao e o El Pedrito, porque este ficheiro e o bot
+  // dele; o bot do Ivan manda a dele explicitamente. Um valor por omissao aqui
+  // e seguro por uma razao so: os handlers deste ficheiro sao TODOS do El
+  // Pedrito, e o unico caminho que passa outra persona e o turnoDeCanal.
+  const idPersona = options.persona ?? PERSONA;
+  const persona = personaDe(idPersona);
+
   // Lida ANTES de entrar na fila: e a geracao do momento em que o lead falou,
   // e nao a de quando o turno chegar a sua vez.
   const generation = currentGeneration(chatId);
@@ -635,9 +649,9 @@ async function runFunnelTurn(
     //
     // Fica ANTES do keepTyping, senao o lead via o "a escrever..." de uma
     // resposta que nunca chega.
-    if ((await upsertLead({ chatId, persona: PERSONA })).humanHandover) {
+    if ((await upsertLead({ chatId, persona: idPersona })).humanHandover) {
       if (options.storeIncoming) {
-        await addMessage({ chatId, persona: PERSONA, role: 'user', content: incoming });
+        await addMessage({ chatId, persona: idPersona, role: 'user', content: incoming });
       }
 
       log.info(`turno do chat ${chatId} nao respondido: a conversa esta a ser levada a mao`);
@@ -649,21 +663,21 @@ async function runFunnelTurn(
     try {
       // Historico lido ANTES de gravar a mensagem nova: as duas IAs recebem o
       // passado como contexto e a mensagem atual separadamente.
-      const history = await getRecentMessages(chatId, PERSONA);
-      const current = await upsertLead({ chatId, persona: PERSONA });
+      const history = await getRecentMessages(chatId, idPersona);
+      const current = await upsertLead({ chatId, persona: idPersona });
 
       // Lida ANTES da cadeia: e a pergunta que o prompt vai mandar fazer, e e
       // ela que se marca como feita no fim do turno.
-      const perguntaDoTurno = proximaPergunta(personaDe(PERSONA), current);
+      const perguntaDoTurno = proximaPergunta(persona, current);
 
       const directive = await planStrategy({
-        persona: personaDe(PERSONA),
+        persona: persona,
         lead: current,
         history,
         incoming,
       });
       const answer = await writeReply({
-        persona: personaDe(PERSONA),
+        persona: persona,
         lead: current,
         history,
         incoming,
@@ -679,7 +693,7 @@ async function runFunnelTurn(
       }
 
       if (options.storeIncoming) {
-        await addMessage({ chatId, persona: PERSONA, role: 'user', content: incoming });
+        await addMessage({ chatId, persona: idPersona, role: 'user', content: incoming });
       }
 
       // O lead disse que nao tem dinheiro para isto, ou que ia pedir
@@ -693,7 +707,7 @@ async function runFunnelTurn(
       if (directive.shouldStop && directive.stopReason === 'aperto') {
         // A partir daqui o remarketing tambem nao lhe toca: as listas de
         // campanha excluem quem esta a ser levado a mao.
-        await setHumanHandover(chatId, PERSONA, true);
+        await setHumanHandover(chatId, idPersona, true);
         stopTyping();
 
         log.info(`conversa entregue a mao chat=${chatId}: o lead falou em nao ter dinheiro`);
@@ -703,13 +717,13 @@ async function runFunnelTurn(
 
       await addMessage({
         chatId,
-        persona: PERSONA,
+        persona: idPersona,
         role: 'assistant',
         content: answer,
         directive: JSON.stringify(directive),
       });
 
-      await advanceStage(chatId, PERSONA, directive.shouldStop ? 'perdido' : directive.stage);
+      await advanceStage(chatId, idPersona, directive.shouldStop ? 'perdido' : directive.stage);
       recordPromise(chatId, directive);
       recordCanton(chatId, current.canton, incoming, directive);
       recordJob(chatId, current.job, directive);
@@ -721,19 +735,19 @@ async function runFunnelTurn(
       // sem isto, um "nao trabalho bro" nao guardava nada no campo e a
       // pergunta voltava no turno seguinte.
       if (perguntaDoTurno) {
-        void marcarPerguntaFeita(chatId, PERSONA, perguntaDoTurno.chave);
-        if (perguntaDoTurno.chave === 'nome') void setNomePerguntado(chatId, PERSONA);
+        void marcarPerguntaFeita(chatId, idPersona, perguntaDoTurno.chave);
+        if (perguntaDoTurno.chave === 'nome') void setNomePerguntado(chatId, idPersona);
       }
 
       if (directive.notes.trim().length > 0) {
         const merged = [current.notes, directive.notes.trim()]
           .filter((part): part is string => Boolean(part && part.length > 0))
           .join(' | ');
-        await setNotes(chatId, PERSONA, merged.slice(-2000));
+        await setNotes(chatId, idPersona, merged.slice(-2000));
       }
 
       stopTyping();
-      await sendHumanPaced(ctx, answer, () => currentGeneration(chatId) !== generation);
+      await sendHumanPaced(ctx, persona, answer, () => currentGeneration(chatId) !== generation);
 
       log.info(`respondido chat=${chatId} estagio=${directive.stage}`);
     } finally {
@@ -879,19 +893,19 @@ bot.on([':photo', ':document'], async (ctx) => {
  * entrada nao ha update nenhum do Telegram, e portanto nao ha ctx — isto faz
  * de ponte para a api, ligada a este chat.
  */
-function contextoParaChat(chatId: number): Context {
+function contextoParaChat(chatId: number, persona: IdPersona = PERSONA): Context {
   // O canal e resolvido a cada envio, e nao aqui: um Context destes e criado
   // uma vez e usado ao longo de uma resposta inteira, e entre a primeira
   // bolha e a ultima o lead pode ter acabado de ser marcado como userbot.
   return {
     chat: { id: chatId, type: 'private' },
     reply: async (text: string) => {
-      const canal = await canalParaChat(chatId, PERSONA);
+      const canal = await canalParaChat(chatId, persona);
       const { messageId } = await canal.enviar(chatId, text);
       return { message_id: messageId };
     },
     replyWithChatAction: async () => {
-      const canal = await canalParaChat(chatId, PERSONA);
+      const canal = await canalParaChat(chatId, persona);
       await canal.aEscrever(chatId);
     },
   } as unknown as Context;
@@ -930,8 +944,23 @@ registarCanal(canalDoBot);
  * IAs, o mesmo ritmo humano. A unica diferenca e por onde a resposta sai, e
  * disso trata o canal.
  */
+/**
+ * Um turno do funil entregue por um transporte que nao e a Bot API deste bot.
+ *
+ * E por aqui que entram a conta de utilizador do El Pedrito e o bot do Ivan. A
+ * persona vem por argumento e nunca e adivinhada: quem chama sabe por onde a
+ * mensagem entrou, e e isso que decide quem responde.
+ */
+export function turnoDeCanal(persona: IdPersona, chatId: number, texto: string): void {
+  dispatchFunnelTurn(contextoParaChat(chatId, persona), chatId, texto, {
+    storeIncoming: true,
+    persona,
+  });
+}
+
+/** A conta de utilizador do El Pedrito. */
 export function turnoDoUserbot(chatId: number, texto: string): void {
-  dispatchFunnelTurn(contextoParaChat(chatId), chatId, texto, { storeIncoming: true });
+  turnoDeCanal(PERSONA, chatId, texto);
 }
 
 /**

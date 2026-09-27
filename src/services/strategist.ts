@@ -387,9 +387,7 @@ export async function buildPrompt(params: {
 - chat_id: ${lead.chatId}
 - como o tratas: ${lead.tratamento ?? '(ainda nao ha nome de pessoa)'}
 - nome no perfil do Telegram: ${lead.firstName ?? 'desconhecido'}
-- o que lhe chamou a atencao: ${lead.atencao ?? 'ainda nao disse'}
-- ha quanto tempo esta na Suica: ${lead.tempoSuica ?? 'ainda nao disse'}
-- em que TU (Pedrito) trabalhaste, para este lead: ${lead.oficioPedrito ?? '(ainda por escolher)'}
+${persona.contextoDoLead(lead)}
 ${deveCumprimentar(history[history.length - 1]?.createdAt)
   ? `- CUMPRIMENTA: esta e a primeira mensagem da conversa (ou do dia). O
   cumprimento certo para a hora da Suica agora e "${saudacaoAgora()}". Usa esse
@@ -399,9 +397,6 @@ ${deveCumprimentar(history[history.length - 1]?.createdAt)
   cumprimenta a mesma pessoa cinco vezes seguidas, e ver isso denuncia a
   maquina. Responde directamente ao que ele disse.`}
 - estagio atual: ${lead.stage}
-- cantao: ${lead.canton ?? 'desconhecido'}
-- trabalho: ${lead.job ?? 'desconhecido'}
-- experiencia com apostas: ${lead.bettingExperience ?? 'desconhecida'}
 - TURNO NUMERO: ${history.filter((m) => m.role === 'user').length + 1} (usa a SEQUENCIA DE ABORDAGEM)
 - anotacoes anteriores: ${lead.notes ?? '(nenhuma)'}
 

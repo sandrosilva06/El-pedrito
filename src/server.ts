@@ -18,6 +18,7 @@ import { preencherNomes } from './telegram/identidades';
 import { LEADS_RECUPERADOS } from './db/leads-recuperados';
 import { startRemarketingScheduler, stopRemarketingScheduler } from './scheduler/remarketing';
 import { BOT_COMMANDS, bot, resumeWithAi, turnoDoUserbot } from './telegram/bot';
+import { botIvan, iniciarBotIvan } from './telegram/bot-ivan';
 import { iniciarUserbot, pararUserbot } from './telegram/userbot';
 import { createInboxRouter } from './web/inbox';
 import { ADMIN_HTML } from './web/page';
@@ -129,6 +130,29 @@ const webhookHandler =
         timeoutMilliseconds: 60_000,
       })
     : null;
+
+// O mesmo para o Ivan, no caminho dele e com o segredo dele. Null quando nao ha
+// token: a rota responde, mas explica que o Ivan nao esta ligado, em vez de dar
+// um 404 mudo que esconderia a variavel em falta.
+const webhookIvan =
+  env.TELEGRAM_MODE === 'webhook' && botIvan && env.ivanWebhookSecret
+    ? webhookCallback(botIvan, 'express', {
+        secretToken: env.ivanWebhookSecret,
+        timeoutMilliseconds: 60_000,
+      })
+    : null;
+
+app.post(env.ivanWebhookPath, express.json({ limit: '1mb' }), (req, res) => {
+  if (!webhookIvan) {
+    res.status(409).json({
+      error: 'o bot do Ivan nao esta ligado',
+      hint: 'define IVAN_BOT_TOKEN (e TELEGRAM_MODE=webhook) para o activar',
+    });
+    return;
+  }
+
+  void webhookIvan(req, res);
+});
 
 // As rotas ficam registradas nos dois caminhos e nos dois modos: o caminho
 // derivado do token (o que a aplicacao registra no Telegram) e o /webhook
@@ -293,6 +317,11 @@ async function start(): Promise<void> {
     log.error(telegram.error);
   }
 
+  // Os handlers e o canal do Ivan primeiro, porque nao precisam de rede. Assim o
+  // agendador e o painel ja o conhecem, e uma ligacao lenta ao Telegram — que
+  // nos arranques a frio do Render chega a demorar — nao atrasa isto.
+  const temIvan = iniciarBotIvan();
+
   try {
     await bot.init();
     telegram.botUsername = bot.botInfo.username;
@@ -306,13 +335,47 @@ async function start(): Promise<void> {
       await startPolling();
     }
 
-    // So depois de o bot estar ligado: o agendador envia pela API do Telegram.
     startRemarketingScheduler();
   } catch (error) {
     // O processo continua de pe: o /health passa a responder "degraded" com o
     // motivo, o que e mais diagnosticavel do que um container reiniciando.
     telegram.error = error instanceof Error ? error.message : String(error);
     log.error('falha ao conectar no Telegram; servidor segue no ar', error);
+  }
+
+  // FORA do try de cima, de proposito: o Ivan nao pode ficar sem ligar so porque
+  // o El Pedrito nao conseguiu falar com o Telegram, nem o contrario. Sao dois
+  // negocios a correr no mesmo processo, e nao um.
+  if (temIvan) await ligarIvan();
+}
+
+/**
+ * O bot do Ivan, quando houver token.
+ *
+ * Corre DEPOIS do El Pedrito e dentro do seu proprio try: uma falha a ligar o
+ * Ivan nao pode derrubar o bot que esta a converter.
+ */
+async function ligarIvan(): Promise<void> {
+  if (!botIvan) return;
+
+  try {
+    const eu = await botIvan.api.getMe();
+    log.info(`bot do Ivan inicializado: @${eu.username}`);
+
+    if (env.TELEGRAM_MODE === 'webhook' && env.ivanWebhookSecret) {
+      const url = `${env.TELEGRAM_WEBHOOK_URL}${env.ivanWebhookPath}`;
+      await botIvan.api.setWebhook(url, {
+        secret_token: env.ivanWebhookSecret,
+        drop_pending_updates: !isProduction,
+        allowed_updates: ['message'],
+      });
+      log.info(`webhook do Ivan registrado em ${url}`);
+    } else {
+      void botIvan.start({ allowed_updates: ['message'] });
+      log.info('bot do Ivan em long polling');
+    }
+  } catch (error) {
+    log.error('o bot do Ivan nao ligou; o El Pedrito segue normal', error);
   }
 }
 

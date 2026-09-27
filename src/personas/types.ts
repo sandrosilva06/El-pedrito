@@ -72,6 +72,16 @@ export interface Persona {
   blocoDeFase(lead: LeadComFactos, history: StoredMessage[]): string;
 
   /**
+   * As linhas de CONTEXTO DO LEAD que sao deste influencer.
+   *
+   * O motor monta o contexto comum (chat_id, nome, estagio, turno, notas) e pede
+   * a persona o resto. Sem isto, o prompt do Ivan levava "ha quanto tempo esta
+   * na Suica" e "em que TU (Pedrito) trabalhaste" — que e o funil do outro, dito
+   * ao modelo como se fosse o dele.
+   */
+  contextoDoLead(lead: Lead): string;
+
+  /**
    * Preparacao de um lead novo, se este influencer precisar de alguma.
    *
    * Existe por causa do oficio do El Pedrito, escolhido a sorte uma vez por lead

@@ -401,6 +401,10 @@ export type Env = Omit<
   GEMINI_MODEL: string;
   /** Alias fixo aceito junto da rota principal. */
   webhookAliasPath: string;
+  /** Onde o bot do Ivan recebe os updates dele. */
+  ivanWebhookPath: string;
+  /** Segredo do header do Ivan, derivado do token dele. Null sem token. */
+  ivanWebhookSecret: string | null;
   /** De onde veio o modo: config explicita, deducao, ou imposicao de producao. */
   modeSource: 'explicito' | 'automatico' | 'forcado-em-producao';
   /** Producao sem URL publica: nao da para registrar webhook e o bot fica mudo. */
@@ -576,6 +580,13 @@ function load(): Env {
     // O caminho derivado do token continua aceito, para nao quebrar um webhook
     // que ja tenha sido registrado nele.
     webhookAliasPath: `/telegram/${tokenTail}`,
+    // O Ivan tem caminho e segredo proprios, derivados do SEU token: dois bots
+    // no mesmo servico nao podem partilhar a porta de entrada, senao um recebia
+    // os updates do outro e o Telegram recusava a assinatura.
+    ivanWebhookPath: '/webhook/ivan',
+    ivanWebhookSecret: value.IVAN_BOT_TOKEN
+      ? deriveWebhookSecret(value.IVAN_BOT_TOKEN)
+      : null,
     modeSource: forcedByProduction
       ? 'forcado-em-producao'
       : value.TELEGRAM_MODE

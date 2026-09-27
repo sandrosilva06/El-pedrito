@@ -209,6 +209,20 @@ const schema = z
             .map((part) => Number(part.trim()))
             .filter((part) => Number.isSafeInteger(part)),
     ),
+    /**
+     * Quanto tempo o Ivan demora a mandar a primeira mensagem, com o "a
+     * escrever..." a correr.
+     *
+     * A saudacao e texto fixo e saia no mesmo instante em que o lead carregava
+     * no /start — nao ha pessoa nenhuma que leia e responda nesse tempo, e o
+     * funil inteiro esta construido para nao parecer uma maquina. Do resto da
+     * conversa ja tratava o ritmo humano; so a primeira escapava.
+     *
+     * Zero desliga a espera. O maximo e baixo de proposito: isto corre dentro
+     * do webhook do Telegram, e prender uma entrega demasiado tempo faz o
+     * Telegram reenviar o mesmo update.
+     */
+    IVAN_GREETING_DELAY_MS: intFromString(3000, 0, 15000),
     MIN_AGE: intFromString(18, 0, 99),
     COMPLIANCE_NOTE: optionalString.transform(
       (value) =>

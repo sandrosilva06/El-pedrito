@@ -41,6 +41,36 @@ const PERSONA = 'ivan' as const;
  */
 export const botIvan = env.IVAN_BOT_TOKEN ? new Bot(env.IVAN_BOT_TOKEN) : null;
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Espera, com o "a escrever..." a correr, antes de mandar a mensagem.
+ *
+ * O indicador e o que faz a espera ser leitura e nao avaria: sem ele o lead ve
+ * tres segundos de silencio depois de ter carregado num botao, e tres segundos
+ * de silencio parecem uma coisa partida. Com ele, e alguem a escrever.
+ *
+ * O Telegram apaga o indicador ao fim de cerca de cinco segundos, dai o
+ * refrescar; e o mesmo que o `typeFor` do El Pedrito faz. Nunca lanca: a
+ * saudacao sai a mesma se o indicador falhar.
+ */
+async function esperarAEscrever(
+  ctx: { replyWithChatAction(accao: 'typing'): Promise<unknown> },
+  totalMs: number,
+): Promise<void> {
+  if (totalMs <= 0) return;
+
+  const REFRESCAR_MS = 4_500;
+  let passado = 0;
+
+  while (passado < totalMs) {
+    await ctx.replyWithChatAction('typing').catch(() => undefined);
+    const passo = Math.min(REFRESCAR_MS, totalMs - passado);
+    await sleep(passo);
+    passado += passo;
+  }
+}
+
 /**
  * Grava que este lead fala pelo bot do Ivan.
  *
@@ -122,10 +152,16 @@ export function iniciarBotIvan(): boolean {
     // outro lado da mesma correccao.
     await marcarTransporteDoIvan(chatId);
 
-    // O /start nao passa pelo funil: a primeira coisa que o lead vê tem de sair
-    // na hora, e nao depois de duas chamadas ao Gemini. O texto vem da persona e
-    // nao daqui: e o Ivan a falar, nao o transporte.
+    // O /start nao passa pelo funil: a saudacao e texto fixo e nao espera pelas
+    // duas chamadas ao Gemini. O texto vem da persona e nao daqui: e o Ivan a
+    // falar, nao o transporte.
     const saudacao = ivan.greeting(ctx.from?.first_name ?? null);
+
+    // Mas tambem nao sai no mesmo instante em que ele carrega no botao. Nao ha
+    // pessoa nenhuma que leia e responda nesse tempo, e o funil inteiro esta
+    // construido para nao parecer uma maquina — do resto da conversa ja tratava
+    // o ritmo humano, so a primeira mensagem escapava.
+    await esperarAEscrever(ctx, env.IVAN_GREETING_DELAY_MS);
 
     const enviada = await ctx.reply(saudacao, { link_preview_options: { is_disabled: true } });
     await addMessage({

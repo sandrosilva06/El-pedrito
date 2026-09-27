@@ -40,6 +40,7 @@ import { sentidoDaImagem } from '../utils/legenda';
 import { nextOccurrenceUtc } from '../utils/timezone';
 import { canalParaChat, registarCanal, type Canal } from './canal';
 import { type IdPersona } from '../personas/ids';
+import { personaDe } from '../personas';
 
 const log = createLogger('telegram');
 
@@ -653,10 +654,21 @@ async function runFunnelTurn(
 
       // Lida ANTES da cadeia: e a pergunta que o prompt vai mandar fazer, e e
       // ela que se marca como feita no fim do turno.
-      const perguntaDoTurno = proximaPergunta(current);
+      const perguntaDoTurno = proximaPergunta(personaDe(PERSONA), current);
 
-      const directive = await planStrategy({ lead: current, history, incoming });
-      const answer = await writeReply({ lead: current, history, incoming, directive });
+      const directive = await planStrategy({
+        persona: personaDe(PERSONA),
+        lead: current,
+        history,
+        incoming,
+      });
+      const answer = await writeReply({
+        persona: personaDe(PERSONA),
+        lead: current,
+        history,
+        incoming,
+        directive,
+      });
 
       // As duas chamadas acima levam segundos, e o /parar pode ter chegado no
       // meio delas. Verifica-se outra vez antes de gravar seja o que for: a

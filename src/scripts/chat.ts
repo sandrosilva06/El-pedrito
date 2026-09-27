@@ -9,6 +9,7 @@
  * que e o que interessa ao calibrar os prompts.
  */
 import readline from 'node:readline/promises';
+import { personaDe } from '../personas';
 import { stdin, stdout } from 'node:process';
 
 import 'dotenv/config';
@@ -41,9 +42,9 @@ async function main(): Promise<void> {
     const lead = await db.upsertLead({ chatId: CHAT_ID, persona: PERSONA, firstName: NAME });
 
     const t0 = Date.now();
-    const directive = await planStrategy({ lead, history, incoming });
+    const directive = await planStrategy({ persona: personaDe(PERSONA), lead, history, incoming });
     const t1 = Date.now();
-    const answer = await writeReply({ lead, history, incoming, directive });
+    const answer = await writeReply({ persona: personaDe(PERSONA), lead, history, incoming, directive });
     const t2 = Date.now();
 
     await db.addMessage({ chatId: CHAT_ID, persona: PERSONA, role: 'user', content: incoming });

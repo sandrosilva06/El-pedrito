@@ -149,16 +149,45 @@ export async function canalParaChat(chatId: number, persona: IdPersona): Promise
   // transporte resolve-se com undefined em silencio.
   const { getLead } = await import('../db/database');
   const lead = await getLead(chatId, persona);
-  const nome = transporteValido(lead?.transporte) ?? canalPorOmissao(persona);
+  const nome = transporteValido(lead?.transporte, persona) ?? canalPorOmissao(persona);
 
   transportes.set(chave, nome);
   return canalDe(nome);
 }
 
-/** A coluna e texto livre; isto recusa o que nao e um canal conhecido. */
-function transporteValido(valor: string | null | undefined): NomeCanal | null {
-  if (valor === 'bot' || valor === 'userbot' || valor === 'bot_ivan') return valor;
-  return null;
+/**
+ * A coluna e texto livre; isto recusa o que nao serve.
+ *
+ * Recusa duas coisas, e a segunda custou-nos uma conversa em producao: o que
+ * nao e um canal conhecido, E O QUE E DE OUTRO INFLUENCER.
+ *
+ * A coluna `transporte` nasceu no tempo em que so havia o El Pedrito e tem
+ * `DEFAULT 'bot'`. Quando o Ivan chegou, todos os leads dele passaram a nascer
+ * apontados ao canal do El Pedrito — e como 'bot' E um canal conhecido, isto
+ * aceitava-o. O `canalPorOmissao` que existe logo abaixo nunca chegava a
+ * correr, porque a coluna nunca e nula. Resultado: as palavras eram do Ivan, os
+ * prompts eram do Ivan, o lead era do Ivan, e a mensagem saia pelo BOT DO EL
+ * PEDRITO. Quem fez /start ao Ivan recebeu resposta de outra pessoa.
+ *
+ * O `PERSONA_DO_CANAL` existe exactamente para isto e nunca tinha sido
+ * consultado aqui. Consultado, um valor de outra persona cai para o canal por
+ * omissao da persona certa — e isso repara sozinho, na leitura, todas as linhas
+ * que ja estao gravadas com o valor errado, sem migracao nenhuma.
+ */
+function transporteValido(
+  valor: string | null | undefined,
+  persona: IdPersona,
+): NomeCanal | null {
+  if (valor !== 'bot' && valor !== 'userbot' && valor !== 'bot_ivan') return null;
+  if (personaDoCanal(valor) !== persona) {
+    log.warn(
+      `lead da persona "${persona}" com transporte "${valor}", que e de outro influencer: ` +
+        'ignorado, responde-se pelo canal dela',
+    );
+    return null;
+  }
+
+  return valor;
 }
 
 /** A porta de entrada de cada influencer, quando o lead ainda nao tem uma. */

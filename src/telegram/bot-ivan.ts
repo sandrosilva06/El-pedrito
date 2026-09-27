@@ -18,7 +18,7 @@
 import { Bot } from 'grammy';
 
 import { env } from '../config/env';
-import { addMessage, upsertLead } from '../db/database';
+import { addMessage, setTransporte, upsertLead } from '../db/database';
 import { ivan } from '../personas/ivan';
 import { createLogger } from '../utils/logger';
 import { registarCanal, type Canal } from './canal';
@@ -40,6 +40,23 @@ const PERSONA = 'ivan' as const;
  * Pedrito nao da por nada.
  */
 export const botIvan = env.IVAN_BOT_TOKEN ? new Bot(env.IVAN_BOT_TOKEN) : null;
+
+/**
+ * Grava que este lead fala pelo bot do Ivan.
+ *
+ * Nao e cosmetico: sem isto a coluna fica no seu DEFAULT ('bot'), que e o canal
+ * do El Pedrito, e o painel mostra o transporte errado. A resposta ao lead ja
+ * esta protegida do outro lado, no `transporteValido`, mas o valor gravado
+ * tambem tem de estar certo.
+ */
+async function marcarTransporteDoIvan(chatId: number): Promise<void> {
+  try {
+    await setTransporte(chatId, PERSONA, 'bot_ivan');
+  } catch (erro) {
+    // Nunca vale a pena deixar de atender por causa disto.
+    log.error(`falha a marcar o transporte do chat ${chatId}`, erro);
+  }
+}
 
 /** O canal do Ivan, para o funil nao precisar de saber qual e qual. */
 function canalDoIvan(cliente: Bot): Canal {
@@ -98,6 +115,13 @@ export function iniciarBotIvan(): boolean {
       languageCode: ctx.from?.language_code ?? null,
     });
 
+    // Diz-se por onde ele entrou, em vez de deixar a coluna no seu DEFAULT.
+    // O default e 'bot', do tempo em que so havia o El Pedrito, e um lead do
+    // Ivan gravado assim e respondido pelo bot do OUTRO influencer. O
+    // `transporteValido` ja recusa isso na leitura; gravar o valor certo e o
+    // outro lado da mesma correccao.
+    await marcarTransporteDoIvan(chatId);
+
     // O /start nao passa pelo funil: a primeira coisa que o lead vê tem de sair
     // na hora, e nao depois de duas chamadas ao Gemini. O texto vem da persona e
     // nao daqui: e o Ivan a falar, nao o transporte.
@@ -119,6 +143,10 @@ export function iniciarBotIvan(): boolean {
     const texto = ctx.message?.text?.trim();
     if (!chatId || ctx.chat?.type !== 'private' || !texto) return;
     if (texto.startsWith('/')) return;
+
+    // Tambem aqui, e nao so no /start: um lead pode chegar ao Ivan sem nunca
+    // ter feito /start (um link directo para a conversa, por exemplo).
+    await marcarTransporteDoIvan(chatId);
 
     turnoDeCanal(PERSONA, chatId, texto);
   });

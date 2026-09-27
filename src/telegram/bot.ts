@@ -396,11 +396,8 @@ bot.command('start', async (ctx) => {
 
   await advanceStage(lead.chatId, PERSONA, 'qualificacao');
 
-  const name = lead.firstName ? ` ${lead.firstName}` : '';
-  const greeting =
-    `Olá${name}, tudo bem? Sou o ${env.AGENT_NAME}, do grupo ${env.GROUP_NAME}.\n\n` +
-    `Este grupo foi lançado para ${env.TARGET_AUDIENCE}. Diz-me só uma coisa: ` +
-    'já costumas acompanhar apostas desportivas ou seria a primeira vez?';
+  // O texto vem da persona: e o influencer a falar, nao o transporte.
+  const greeting = personaDe(PERSONA).greeting(lead.firstName);
 
   await addMessage({ chatId: lead.chatId, persona: PERSONA, role: 'assistant', content: greeting });
   dispatchMessage(ctx, lead.chatId, greeting);
@@ -1136,7 +1133,7 @@ bot.on('message', async (ctx) => {
   const lead = await leadFromContext(ctx);
   if (!lead) return;
 
-  await ctx.reply('Escreve-me antes por texto, que assim consigo ajudar-te melhor.');
+  await ctx.reply(personaDe(PERSONA).nonTextNudge);
 });
 
 // ---------------------------------------------------------------------------

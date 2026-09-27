@@ -98,12 +98,9 @@ export function iniciarBotIvan(): boolean {
     });
 
     // O /start nao passa pelo funil: a primeira coisa que o lead vê tem de sair
-    // na hora, e nao depois de duas chamadas ao Gemini.
-    const nome = ctx.from?.first_name ? ` ${ctx.from.first_name}` : '';
-    const saudacao =
-      `Ya${nome}, tudo fixe? 🤝🏽\n\n` +
-      `Sou o ${ivan.agentName}, sou eu mesmo que te respondo por aqui.\n\n` +
-      'Diz-me lá, o que é que andas à procura?';
+    // na hora, e nao depois de duas chamadas ao Gemini. O texto vem da persona e
+    // nao daqui: e o Ivan a falar, nao o transporte.
+    const saudacao = ivan.greeting(ctx.from?.first_name ?? null);
 
     const enviada = await ctx.reply(saudacao, { link_preview_options: { is_disabled: true } });
     await addMessage({
@@ -133,13 +130,15 @@ export function iniciarBotIvan(): boolean {
 
     await upsertLead({ chatId, persona: PERSONA, firstName: ctx.from?.first_name ?? null });
     await pausarPorMedia(chatId, PERSONA);
-    await ctx.reply('Recebido 👊🏽 Vou ver isso e digo-te já.');
+    await ctx.reply(
+      ivan.proofAcknowledgement?.(ctx.from?.first_name ?? null) ?? 'Recebido 👊🏽',
+    );
   });
 
   botIvan.on('message', async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId || ctx.chat?.type !== 'private') return;
-    await ctx.reply('Manda-me antes por texto mano, assim é mais fácil.');
+    await ctx.reply(ivan.nonTextNudge);
   });
 
   botIvan.catch((err) => {

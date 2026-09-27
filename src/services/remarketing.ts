@@ -1,6 +1,7 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 import { env } from '../config/env';
+import type { Persona } from '../personas/types';
 import type { RemarketingAudience } from '../db/database';
 import { createLogger } from '../utils/logger';
 import { sanitiseDashes } from '../utils/text';
@@ -16,162 +17,25 @@ function getClient(): GoogleGenAI {
 }
 
 /**
- * Guioes de reserva. Nao sao so um fallback de erro: com o Gemini fora do ar
- * ou a quota esgotada, o remarketing tem de continuar a sair — e uma campanha
- * que falha em silencio parece estar a funcionar.
+ * Guiao do toque pedido, ou o brief fixo do publico quando a persona nao tem
+ * guioes por toque.
  *
- * `{nome}` e substituido pelo primeiro nome do lead.
+ * Tudo isto vem da persona e nao de constantes deste ficheiro: o agendador corre
+ * a campanha de cada influencer separadamente, e com um conjunto unico de guioes
+ * os leads do Ivan levavam as mensagens do El Pedrito.
  */
-/**
- * O funil de quem nao converteu tem exactamente dois toques, cada um com o seu
- * texto. Nao sao variacoes da mesma mensagem: o primeiro assume que a pessoa
- * pode ter travado a criar a conta e oferece ajuda; o segundo diz que o lugar
- * continua la. Mandar o segundo texto a quem nunca levou o primeiro estragava
- * os dois.
- */
-export const NAO_CONVERTIDO_TOUCHES: Array<{ brief: string; fallbacks: string[] }> = [
-  {
-    brief: `Primeiro toque, cerca de 24 horas depois de o lead ter ficado calado.
-Ele falou contigo e nao chegou a entrar. Fala da assertividade do grupo hoje,
-pergunta se ficou com alguma duvida a criar a conta e poe-te a jeito para
-ajudar. Amigavel e directo, como quem se lembrou da pessoa.`,
-    fallbacks: [
-      'Boas {nome}! Olha, a malta no grupo VIP está a ter uma assertividade absurda hoje. Tens a certeza que não queres aproveitar isto? Diz-me se ficaste com alguma dúvida ao criar a conta para te ajudar a entrar.',
-      '{nome}, tudo bem? O grupo hoje está a bater certo que se farta. Ficaste com alguma dúvida na criação da conta? Diz-me que eu ajudo-te a tratar disso.',
-      'Boas {nome}! A assertividade no VIP hoje está muito boa e lembrei-me de ti. Travaste nalguma parte do registo? É só dizeres e eu explico o resto.',
-    ],
-  },
-  {
-    brief: `Segundo e ULTIMO toque, cerca de 48 horas depois do primeiro. Diz que
-o bot continua a bater certo e que a malta esta a faturar, lembra que o acesso
-dele continua reservado, e convida-o a fechar isso. Tranquilo, sem cobranca e
-sem queixume por ele nao ter respondido ao primeiro.`,
-    fallbacks: [
-      'Tranquilo {nome}? Passava só para te dizer que o bot continua a bater certinho e a malta está a faturar bem. O teu acesso ainda está reservado, bora lá fechar isso para entrares no ritmo com a malta?',
-      '{nome}, tudo fixe? O bot continua a acertar e o pessoal lá dentro está a faturar. O teu lugar continua reservado, queres fechar isso hoje?',
-      'Boas {nome}! O grupo continua a bater certo e guardei-te o acesso. Bora lá tratar disso para entrares no ritmo com a malta?',
-    ],
-  },
-  {
-    brief: `Toque persistente: este lead ja levou dois toques e continua sem
-entrar. Continua a insistir, todos os dias, mas MUDA o angulo de cada vez — a
-mesma mensagem repetida nao convence ninguem, so ensina a ignorar. Angulos:
-as entradas de hoje, a malta que ja esta dentro, o acesso continuar
-reservado${env.GIVEAWAY_CLAIM ? `, e o passatempo (${env.GIVEAWAY_CLAIM}) a que ele fica a concorrer se entrar` : ''}.
-Curto, directo, sem queixume por ele nao ter respondido as anteriores.
-PROIBIDO prometer lucro ou inventar numeros${env.GIVEAWAY_CLAIM ? '' : ', e PROIBIDO falar de sorteios, premios ou passatempos: nao ha nenhum configurado'}.`,
-    fallbacks: [
-      'Boas {nome}! As entradas de hoje já estão a sair no VIP. O teu acesso continua à espera, queres que te passe os detalhes?',
-      '{nome}, tudo bem? A malta lá dentro está a seguir as de hoje. Ainda vais a tempo, é só dizeres.',
-      'Boas {nome}! Continuo com o teu lugar guardado no grupo. Queres tratar disso hoje?',
-    ],
-  },
-];
-
-/**
- * Quantos guioes diferentes ha para quem nao converteu.
- *
- * Do terceiro toque em diante repete-se o ultimo, que e o persistente e foi
- * escrito para isso: muda de angulo a cada envio em vez de dizer sempre o
- * mesmo.
- */
-export const TOQUE_PERSISTENTE = NAO_CONVERTIDO_TOUCHES.length - 1;
-
-/**
- * Guioes dos disparos manuais da caixa de entrada.
- *
- * Sao diferentes dos do remarketing automatico de proposito: estes saem quando
- * EU carrego no botao, a olhar para a conversa, e nao quando um agendador
- * decide. Por isso vao direitos ao assunto em vez de comecarem por cumprimentar
- * como quem se lembrou da pessoa.
- *
- * Ha varios por botao e escolhe-se um a sorte: disparar o mesmo texto a dez
- * leads faz com que dois que se conhecam percebam que e automatico.
- */
-export const DISPAROS_MANUAIS = {
-  /**
-   * Lead que ainda nao converteu. A expressao "green atras de green" e
-   * obrigatoria — e a forma como a casa descreve a sequencia do grupo, e o que
-   * faz o lead sentir que esta a ficar de fora.
-   */
-  nao_qualificado: [
-    'Mano, a malta no VIP está a fazer green atrás de green hoje! Vamos fechar o teu registo para começares a lucrar também?',
-    'Boas {nome}! Hoje está a sair green atrás de green no grupo. Falta-te só fechares o registo para entrares nisto connosco.',
-    '{nome}, o pessoal lá dentro está em green atrás de green e tu ainda estás de fora. Bora tratar do teu registo?',
-  ],
-  /**
-   * Lead que ja pagou e ja esta no grupo. Aqui nao ha nada para vender: e
-   * acompanhamento, e a pergunta serve para ele responder.
-   */
-  qualificado: [
-    'Fala parceiro! Já viste as tips de hoje no canal VIP? Como é que está a correr a tua gestão de banca por aí?',
-    'Tudo bem {nome}? Como é que te tem corrido lá dentro? Tens conseguido acompanhar as entradas todas do dia?',
-    '{nome}, tudo fixe? Passa pelo VIP para veres as de hoje. Diz-me como está a correr a tua banca.',
-  ],
-} as const;
-
-export type TipoDisparo = keyof typeof DISPAROS_MANUAIS;
-
-/** Escolhe um guiao do botao, ja com o nome do lead colocado. */
-export function guiaoDisparoManual(tipo: TipoDisparo, firstName: string | null): string {
-  const opcoes = DISPAROS_MANUAIS[tipo];
-  const escolhido = opcoes[Math.floor(Math.random() * opcoes.length)] ?? opcoes[0];
-  return personalise(escolhido, firstName);
+function briefFor(persona: Persona, audience: RemarketingAudience, touch: number): string {
+  const { briefs, toques } = persona.remarketing;
+  if (audience !== 'nao_convertido') return briefs[audience];
+  return toques?.[touch]?.brief ?? briefs.nao_convertido;
 }
 
-const FALLBACK_SCRIPTS: Record<RemarketingAudience, string[]> = {
-  // Usado so se alguem pedir "nao_convertido" sem dizer o toque; o caminho
-  // normal passa pelo NAO_CONVERTIDO_TOUCHES acima.
-  nao_convertido: NAO_CONVERTIDO_TOUCHES[0]?.fallbacks ?? [],
-  link_parado: [
-    '{nome}, conseguiste abrir o link? Se deu erro copia e cola noutro navegador, que às vezes o do Telegram baralha-se.',
-    'Boas {nome}! Ficaste com a conta feita ou travaste nalguma parte? Diz-me onde é que ficaste que eu ajudo-te a passar daí.',
-    '{nome}, tudo bem? Só para saber se a página abriu. Se precisares, faço o registo contigo passo a passo.',
-  ],
-  vip: [
-    'Boas {nome}! Vou lançar as entradas de hoje no grupo daqui a pouco. Dá lá um salto para não perderes nenhuma.',
-    '{nome}, tudo bem? O grupo tem estado a bater certo. Vai ao VIP ver as de hoje, é no conjunto que a coisa funciona.',
-    'Tudo fixe {nome}? Já estão a sair entradas no grupo. Aparece por lá, que saltar entradas é onde a malta se estraga.',
-  ],
-  promessa: [
-    'Boas malandro, ja saiste do trabalho? As apostas da noite saem daqui a bocado no VIP, estas pronto para abrires a conta e entrares?',
-    '{nome}, conforme combinado aqui estou eu. Ja tens um bocadinho para tratar disso?',
-    'Boas {nome}, ficou combinado que te apitava a esta hora. Ainda vais a tempo das entradas de hoje.',
-  ],
-};
-
-const BRIEFS: Record<RemarketingAudience, string> = {
-  nao_convertido: NAO_CONVERTIDO_TOUCHES[0]?.brief ?? '',
-  link_parado: `Este lead recebeu o link ha pouco e ficou calado. Nao esta a
-recusar, travou em alguma coisa: ou a pagina nao abriu, ou perdeu-se no
-registo. A mensagem pergunta o que aconteceu e oferece ajuda concreta, passo a
-passo. PROIBIDO falar de deposito, de valores ou de urgencia: o que falta saber
-e onde ele parou. Uma pergunta so, facil de responder.`,
-  vip: `Estes leads JA DEPOSITARAM e estao no grupo. A mensagem avisa que vao
-sair entradas no grupo, fala de como o grupo tem andado a acertar, e manda-o
-ir la ver. Tom de companheiro, nada de vendas — estas pessoas ja compraram.
-Lembra tambem, quando encaixar, que e para seguir TODAS as entradas: o
-resultado vem do conjunto e nao de uma escolhida a dedo. PROIBIDO prometer
-lucro, inventar numeros de acerto ou dizer que nao se perde nenhuma.`,
-  promessa: `Este lead disse que tratava do assunto a esta hora e tu ficaste de
-lhe apitar. A mensagem e o cumprimento desse combinado, nao uma cobranca:
-lembra que ficou combinado, pergunta se ele ja tem um bocadinho, e refere que
-as entradas de hoje ainda vao a tempo. Nada de pressao e nada de queixume por
-ele nao ter feito ainda.`,
-};
-
-/** Guiao do toque pedido, ou o brief fixo do publico quando nao ha toques. */
-function briefFor(audience: RemarketingAudience, touch: number): string {
-  if (audience !== 'nao_convertido') return BRIEFS[audience];
-  return NAO_CONVERTIDO_TOUCHES[touch]?.brief ?? BRIEFS.nao_convertido;
-}
-
-function buildPrompt(audience: RemarketingAudience, touch: number): string {
-  return `Es o ${env.AGENT_NAME}, dono do grupo "${env.GROUP_NAME}".
+function buildPrompt(persona: Persona, audience: RemarketingAudience, touch: number): string {
+  return `Es o ${persona.agentName}, dono do grupo "${persona.groupName}".
 
 Escreve UMA mensagem de acompanhamento para enviar por Telegram.
 
-${briefFor(audience, touch)}
+${briefFor(persona, audience, touch)}
 
 REGRAS:
 - Portugues de Portugal. Tratamento por tu. Nada de "voce", nada de gerundio
@@ -189,11 +53,12 @@ REGRAS:
 - Responde apenas com o texto da mensagem.`;
 }
 
-function pickFallback(audience: RemarketingAudience, touch: number): string {
+function pickFallback(persona: Persona, audience: RemarketingAudience, touch: number): string {
+  const { fallbacks, toques } = persona.remarketing;
   const scripts =
     audience === 'nao_convertido'
-      ? (NAO_CONVERTIDO_TOUCHES[touch]?.fallbacks ?? FALLBACK_SCRIPTS.nao_convertido)
-      : FALLBACK_SCRIPTS[audience];
+      ? (toques?.[touch]?.fallbacks ?? fallbacks.nao_convertido)
+      : fallbacks[audience];
 
   // Roda pela hora para o mesmo guiao nao sair em slots seguidos.
   const index = Math.floor(Date.now() / 3_600_000) % scripts.length;
@@ -206,6 +71,7 @@ function pickFallback(audience: RemarketingAudience, touch: number): string {
  * campanha esgotaria a quota antes de chegar ao fim da lista.
  */
 export async function generateRemarketingMessage(
+  persona: Persona,
   audience: RemarketingAudience,
   touch = 0,
 ): Promise<{ template: string; generated: boolean }> {
@@ -216,7 +82,7 @@ export async function generateRemarketingMessage(
     run: async () => {
       const response = await getClient().models.generateContent({
         model: env.GEMINI_WRITER_MODEL,
-        contents: buildPrompt(audience, touch),
+        contents: buildPrompt(persona, audience, touch),
         config: {
           thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
           temperature: 1,
@@ -230,13 +96,13 @@ export async function generateRemarketingMessage(
 
   if (!result) {
     log.warn(`a usar guiao de reserva para "${audience}" (toque ${touch + 1})`);
-    return { template: pickFallback(audience, touch), generated: false };
+    return { template: pickFallback(persona, audience, touch), generated: false };
   }
 
   // Sem o marcador nao ha personalizacao; melhor um guiao que a tem.
   if (!result.includes('{nome}')) {
     log.warn(`mensagem gerada sem {nome}; a usar guiao de reserva para "${audience}"`);
-    return { template: pickFallback(audience, touch), generated: false };
+    return { template: pickFallback(persona, audience, touch), generated: false };
   }
 
   return { template: result, generated: true };
@@ -252,4 +118,27 @@ export function personalise(template: string, firstName: string | null): string 
     .replaceAll('{nome}', '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+/**
+ * O ultimo toque com guiao proprio desta persona.
+ *
+ * A partir dele repete-se o mesmo angulo: os toques seguintes sao insistencia, e
+ * escrever um guiao diferente para o decimo toque seria inventar trabalho.
+ */
+export function toquePersistente(persona: Persona): number {
+  return Math.max(0, (persona.remarketing.toques?.length ?? 1) - 1);
+}
+
+export type TipoDisparo = 'nao_qualificado' | 'qualificado';
+
+/** Escolhe um guiao do botao do painel, ja com o nome do lead colocado. */
+export function guiaoDisparoManual(
+  persona: Persona,
+  tipo: TipoDisparo,
+  firstName: string | null,
+): string {
+  const opcoes = persona.remarketing.disparos[tipo];
+  const escolhido = opcoes[Math.floor(Math.random() * opcoes.length)] ?? opcoes[0] ?? '';
+  return personalise(escolhido, firstName);
 }

@@ -11,7 +11,8 @@
  */
 import { env } from '../config/env';
 import { setOficioPedrito } from '../db/database';
-import type { Lead, StoredMessage } from '../db/database';
+import type { Lead, RemarketingAudience, StoredMessage } from '../db/database';
+import { isReturningMarker } from '../services/writer';
 import { proximaPerguntaDe } from './types';
 import type { LeadComFactos, Persona, PerguntaFunil } from './types';
 
@@ -614,6 +615,162 @@ function contextoDoElPedrito(lead: Lead): string {
   ].join('\n');
 }
 
+const TOQUES: Array<{ brief: string; fallbacks: string[] }> = [
+  {
+    brief: `Primeiro toque, cerca de 24 horas depois de o lead ter ficado calado.
+Ele falou contigo e nao chegou a entrar. Fala da assertividade do grupo hoje,
+pergunta se ficou com alguma duvida a criar a conta e poe-te a jeito para
+ajudar. Amigavel e directo, como quem se lembrou da pessoa.`,
+    fallbacks: [
+      'Boas {nome}! Olha, a malta no grupo VIP está a ter uma assertividade absurda hoje. Tens a certeza que não queres aproveitar isto? Diz-me se ficaste com alguma dúvida ao criar a conta para te ajudar a entrar.',
+      '{nome}, tudo bem? O grupo hoje está a bater certo que se farta. Ficaste com alguma dúvida na criação da conta? Diz-me que eu ajudo-te a tratar disso.',
+      'Boas {nome}! A assertividade no VIP hoje está muito boa e lembrei-me de ti. Travaste nalguma parte do registo? É só dizeres e eu explico o resto.',
+    ],
+  },
+  {
+    brief: `Segundo e ULTIMO toque, cerca de 48 horas depois do primeiro. Diz que
+o bot continua a bater certo e que a malta esta a faturar, lembra que o acesso
+dele continua reservado, e convida-o a fechar isso. Tranquilo, sem cobranca e
+sem queixume por ele nao ter respondido ao primeiro.`,
+    fallbacks: [
+      'Tranquilo {nome}? Passava só para te dizer que o bot continua a bater certinho e a malta está a faturar bem. O teu acesso ainda está reservado, bora lá fechar isso para entrares no ritmo com a malta?',
+      '{nome}, tudo fixe? O bot continua a acertar e o pessoal lá dentro está a faturar. O teu lugar continua reservado, queres fechar isso hoje?',
+      'Boas {nome}! O grupo continua a bater certo e guardei-te o acesso. Bora lá tratar disso para entrares no ritmo com a malta?',
+    ],
+  },
+  {
+    brief: `Toque persistente: este lead ja levou dois toques e continua sem
+entrar. Continua a insistir, todos os dias, mas MUDA o angulo de cada vez — a
+mesma mensagem repetida nao convence ninguem, so ensina a ignorar. Angulos:
+as entradas de hoje, a malta que ja esta dentro, o acesso continuar
+reservado${env.GIVEAWAY_CLAIM ? `, e o passatempo (${env.GIVEAWAY_CLAIM}) a que ele fica a concorrer se entrar` : ''}.
+Curto, directo, sem queixume por ele nao ter respondido as anteriores.
+PROIBIDO prometer lucro ou inventar numeros${env.GIVEAWAY_CLAIM ? '' : ', e PROIBIDO falar de sorteios, premios ou passatempos: nao ha nenhum configurado'}.`,
+    fallbacks: [
+      'Boas {nome}! As entradas de hoje já estão a sair no VIP. O teu acesso continua à espera, queres que te passe os detalhes?',
+      '{nome}, tudo bem? A malta lá dentro está a seguir as de hoje. Ainda vais a tempo, é só dizeres.',
+      'Boas {nome}! Continuo com o teu lugar guardado no grupo. Queres tratar disso hoje?',
+    ],
+  },
+];
+
+/**
+ * Guioes dos disparos manuais do painel.
+ *
+ * Sao diferentes dos do remarketing automatico de proposito: estes saem quando o
+ * operador carrega no botao, a olhar para a conversa, e nao quando um agendador
+ * decide. Por isso vao direitos ao assunto em vez de comecarem por cumprimentar
+ * como quem se lembrou da pessoa.
+ *
+ * Ha varios por botao e escolhe-se um a sorte: disparar o mesmo texto a dez leads
+ * faz com que dois que se conhecam percebam que e automatico.
+ */
+const DISPAROS = {
+  /**
+   * Lead que ainda nao converteu. A expressao "green atras de green" e
+   * obrigatoria — e a forma como a casa descreve a sequencia do grupo, e o que
+   * faz o lead sentir que esta a ficar de fora.
+   */
+  nao_qualificado: [
+    'Mano, a malta no VIP está a fazer green atrás de green hoje! Vamos fechar o teu registo para começares a lucrar também?',
+    'Boas {nome}! Hoje está a sair green atrás de green no grupo. Falta-te só fechares o registo para entrares nisto connosco.',
+    '{nome}, o pessoal lá dentro está em green atrás de green e tu ainda estás de fora. Bora tratar do teu registo?',
+  ],
+  /**
+   * Lead que ja pagou e ja esta no grupo. Aqui nao ha nada para vender: e
+   * acompanhamento, e a pergunta serve para ele responder.
+   */
+  qualificado: [
+    'Fala parceiro! Já viste as tips de hoje no canal VIP? Como é que está a correr a tua gestão de banca por aí?',
+    'Tudo bem {nome}? Como é que te tem corrido lá dentro? Tens conseguido acompanhar as entradas todas do dia?',
+    '{nome}, tudo fixe? Passa pelo VIP para veres as de hoje. Diz-me como está a correr a tua banca.',
+  ],
+};
+
+const FALLBACKS: Record<RemarketingAudience, string[]> = {
+  // Usado so se alguem pedir "nao_convertido" sem dizer o toque; o caminho
+  // normal passa pelo NAO_CONVERTIDO_TOUCHES acima.
+  nao_convertido: TOQUES[0]?.fallbacks ?? [],
+  link_parado: [
+    '{nome}, conseguiste abrir o link? Se deu erro copia e cola noutro navegador, que às vezes o do Telegram baralha-se.',
+    'Boas {nome}! Ficaste com a conta feita ou travaste nalguma parte? Diz-me onde é que ficaste que eu ajudo-te a passar daí.',
+    '{nome}, tudo bem? Só para saber se a página abriu. Se precisares, faço o registo contigo passo a passo.',
+  ],
+  vip: [
+    'Boas {nome}! Vou lançar as entradas de hoje no grupo daqui a pouco. Dá lá um salto para não perderes nenhuma.',
+    '{nome}, tudo bem? O grupo tem estado a bater certo. Vai ao VIP ver as de hoje, é no conjunto que a coisa funciona.',
+    'Tudo fixe {nome}? Já estão a sair entradas no grupo. Aparece por lá, que saltar entradas é onde a malta se estraga.',
+  ],
+  promessa: [
+    'Boas malandro, ja saiste do trabalho? As apostas da noite saem daqui a bocado no VIP, estas pronto para abrires a conta e entrares?',
+    '{nome}, conforme combinado aqui estou eu. Ja tens um bocadinho para tratar disso?',
+    'Boas {nome}, ficou combinado que te apitava a esta hora. Ainda vais a tempo das entradas de hoje.',
+  ],
+};
+
+const BRIEFS: Record<RemarketingAudience, string> = {
+  nao_convertido: TOQUES[0]?.brief ?? '',
+  link_parado: `Este lead recebeu o link ha pouco e ficou calado. Nao esta a
+recusar, travou em alguma coisa: ou a pagina nao abriu, ou perdeu-se no
+registo. A mensagem pergunta o que aconteceu e oferece ajuda concreta, passo a
+passo. PROIBIDO falar de deposito, de valores ou de urgencia: o que falta saber
+e onde ele parou. Uma pergunta so, facil de responder.`,
+  vip: `Estes leads JA DEPOSITARAM e estao no grupo. A mensagem avisa que vao
+sair entradas no grupo, fala de como o grupo tem andado a acertar, e manda-o
+ir la ver. Tom de companheiro, nada de vendas — estas pessoas ja compraram.
+Lembra tambem, quando encaixar, que e para seguir TODAS as entradas: o
+resultado vem do conjunto e nao de uma escolhida a dedo. PROIBIDO prometer
+lucro, inventar numeros de acerto ou dizer que nao se perde nenhuma.`,
+  promessa: `Este lead disse que tratava do assunto a esta hora e tu ficaste de
+lhe apitar. A mensagem e o cumprimento desse combinado, nao uma cobranca:
+lembra que ficou combinado, pergunta se ele ja tem um bocadinho, e refere que
+as entradas de hoje ainda vao a tempo. Nada de pressao e nada de queixume por
+ele nao ter feito ainda.`,
+};
+
+/**
+ * A saudacao do primeiro /start, e as respostas que nao passam pelo redator.
+ *
+ * Estavam no bot.ts, e vieram para ca quando o Ivan trouxe as dele: sao texto que
+ * o lead le, com o nome e o registo de um influencer concreto, e nao mecanica de
+ * transporte.
+ */
+function saudacaoDoElPedrito(firstName: string | null): string {
+  const name = firstName ? ` ${firstName}` : '';
+  return (
+    `Olá${name}, tudo bem? Sou o ${env.AGENT_NAME}, do grupo ${env.GROUP_NAME}.\n\n` +
+    `Este grupo foi lançado para ${env.TARGET_AUDIENCE}. Diz-me só uma coisa: ` +
+    'já costumas acompanhar apostas desportivas ou seria a primeira vez?'
+  );
+}
+
+function reservaDoElPedrito(lead: Lead, incoming: string): string {
+  const name = lead.firstName ? `${lead.firstName}, ` : '';
+
+  if (isReturningMarker(incoming)) {
+    const greeting = lead.firstName ? `Outra vez por aqui, ${lead.firstName}?` : 'Outra vez por aqui, bro?';
+
+    // A quem ainda esta na qualificacao nunca foi proposto nada, e perguntar-lhe
+    // se ja decidiu entrar denuncia o guiao. Retoma-se a conversa em vez de
+    // cobrar uma decisao que ninguem lhe pediu.
+    if (lead.stage === 'novo' || lead.stage === 'qualificacao') {
+      return (
+        `${greeting} Ficaste com alguma dúvida?\n\n` +
+        'O grupo por aqui tem andado bem, tem sido green atrás de green estes dias. ' +
+        'Diz-me só uma coisa para eu perceber se isto dá para ti: já costumas apostar ou seria a primeira vez?'
+      );
+    }
+
+    return (
+      `${greeting} Já decidiste se vais entrar no grupo VIP ou vais continuar a adiar?\n\n` +
+      'A malta lá dentro está a faturar forte, tem sido green atrás de green estes dias. ' +
+      'Bora lá tratar do teu registo para não ficares a ver os outros a lucrar?'
+    );
+  }
+
+  return `${name}deu-me aqui um problema no sistema. Manda outra vez daqui a um bocadinho que eu respondo.`;
+}
+
 export const elPedrito: Persona = {
   id: 'el_pedrito',
   agentName: env.AGENT_NAME,
@@ -636,9 +793,22 @@ export const elPedrito: Persona = {
   // o ritmo do El Pedrito ficar exactamente o que era.
   maxBubbleChars: 200,
 
+  groupName: env.GROUP_NAME,
   minDeposit: env.MIN_DEPOSIT,
   suggestedDeposit: env.SUGGESTED_DEPOSIT,
   platformName: env.PLATFORM_NAME,
 
   complianceNote: env.COMPLIANCE_NOTE,
+
+  greeting: saudacaoDoElPedrito,
+  fallbackReply: reservaDoElPedrito,
+  // Sem resposta propria ao comprovativo: o fluxo da foto dele ja responde.
+  nonTextNudge: 'Escreve-me antes por texto, que assim consigo ajudar-te melhor.',
+
+  remarketing: {
+    briefs: BRIEFS,
+    fallbacks: FALLBACKS,
+    toques: TOQUES,
+    disparos: DISPAROS,
+  },
 };

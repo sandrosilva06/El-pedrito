@@ -9,7 +9,7 @@
  * pela qual isto e uma interface e nao um `if (persona === 'ivan')` espalhado
  * pelo codigo.
  */
-import type { Lead, StoredMessage } from '../db/database';
+import type { Lead, RemarketingAudience, StoredMessage } from '../db/database';
 import type { IdPersona } from './ids';
 
 /** Uma casa por onde o lead se pode registar. */
@@ -120,6 +120,13 @@ export interface Persona {
    * link, que sao codigo comum aos dois influencers. Ficam na persona porque o
    * deposito minimo do Ivan nao e o do El Pedrito, e a plataforma tambem nao.
    */
+  /**
+   * O nome do grupo dele, como o lead o ve.
+   *
+   * O motor usa-o no prompt do remarketing ("es o X, dono do grupo Y"). Sem isto
+   * o Ivan aparecia a dizer que e dono do grupo do El Pedrito.
+   */
+  groupName: string;
   minDeposit: string;
   suggestedDeposit: string;
   platformName: string;
@@ -143,17 +150,55 @@ export interface Persona {
    * automatico. Ausente, o texto segue como veio.
    */
   styleGuard?(text: string): string;
-}
 
-/*
- * O que AINDA nao esta aqui, de proposito.
- *
- * As saudacoes, a resposta ao comprovativo, o texto de reserva e os guioes de
- * remarketing tambem variam entre influencers, mas hoje existe um conjunto so —
- * vivem no bot.ts e no services/remarketing.ts. Entram nesta interface quando o
- * Ivan trouxer os dele, e nao antes: um campo que ninguem le e uma promessa que
- * o compilador nao verifica.
- */
+  /** Saudacao do primeiro /start. */
+  greeting(firstName: string | null): string;
+
+  /**
+   * O que dizer quando o redator falha, para o lead nunca ficar no vacuo.
+   *
+   * Recebe o lead e a mensagem porque a do El Pedrito nao e uma frase fixa: ela
+   * muda se o lead esta a voltar e conforme o ponto do funil. E tem de estar aqui
+   * por uma razao concreta — a dele fala de "green atras de green" e do grupo VIP,
+   * e o Ivan nunca pode dizer isso.
+   */
+  fallbackReply(lead: Lead, incoming: string): string;
+
+  /**
+   * Resposta ao comprovativo de deposito, quando esta persona tiver uma propria.
+   *
+   * Ausente, quem recebe a imagem responde com o que ja respondia.
+   */
+  proofAcknowledgement?(firstName: string | null): string;
+
+  /** Resposta a audio, sticker e afins. */
+  nonTextNudge: string;
+
+  /**
+   * Os guioes de remarketing deste influencer.
+   *
+   * Tem de estar aqui, e nao no services/remarketing.ts, por uma razao concreta:
+   * o agendador corre a campanha de cada persona separadamente, e com um conjunto
+   * unico de guioes os leads do Ivan recebiam as mensagens do El Pedrito — com o
+   * "green atras de green", com os emigrantes na Suica e com o link dele. Sairia
+   * sozinho no primeiro disparo do dia.
+   */
+  remarketing: {
+    /** O que dizer a cada publico, em instrucoes para o redator. */
+    briefs: Record<RemarketingAudience, string>;
+    /** Texto pronto, para quando o modelo falhar. Escolhido a sorte. */
+    fallbacks: Record<RemarketingAudience, string[]>;
+    /**
+     * Um guiao por toque, para quem nao converteu.
+     *
+     * A campanha insiste varias vezes e cada toque tem angulo proprio: repetir o
+     * mesmo texto e o que faz o lead bloquear. Vazio, usa-se o brief geral.
+     */
+    toques?: Array<{ brief: string; fallbacks: string[] }>;
+    /** Guioes dos botoes de disparo manual do painel. */
+    disparos: { nao_qualificado: string[]; qualificado: string[] };
+  };
+}
 
 /**
  * A proxima pergunta a fazer, desta lista.

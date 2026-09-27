@@ -5,7 +5,7 @@ import { GrammyError, InputFile } from 'grammy';
 
 import { env } from '../config/env';
 import { ehIdPersona, type IdPersona } from '../personas/ids';
-import { todasAsPersonas } from '../personas';
+import { personaDe, todasAsPersonas } from '../personas';
 import { botIvan } from '../telegram/bot-ivan';
 import { temCanal } from '../telegram/canal';
 import {
@@ -689,7 +689,7 @@ export function createInboxRouter(): Router {
     }
 
 
-    const texto = guiaoDisparoManual(tipo, lead.firstName);
+    const texto = guiaoDisparoManual(personaDe(lead.persona), tipo, lead.firstName);
 
     try {
       const sent = await bot.api.sendMessage(chatId, texto, {

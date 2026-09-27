@@ -146,6 +146,8 @@ const schema = z
     // Pedrito, e uma partilhada fazia um influencer herdar os numeros do outro.
     IVAN_NAME: optionalString.transform((value) => value ?? 'Ivan Rodrigues'),
     IVAN_MIN_DEPOSIT: optionalString.transform((value) => value ?? '25€'),
+    /** O nome do grupo VIP dele, como o lead o ve. */
+    IVAN_GROUP_NAME: optionalString.transform((value) => value ?? 'VIP dos sinais'),
     /**
      * Lifestyle que o Ivan refere como prova de que o caminho existe.
      *

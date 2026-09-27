@@ -537,6 +537,7 @@ export const ivan: Persona = {
   // Noventa e nao duzentos e vinte: o Ivan escreve em frases de rua, curtas.
   maxBubbleChars: 90,
 
+  groupName: env.IVAN_GROUP_NAME,
   minDeposit: env.IVAN_MIN_DEPOSIT,
   suggestedDeposit: env.IVAN_SUGGESTED_DEPOSIT,
   platformName: houses[0]?.label ?? 'a casa',
@@ -560,5 +561,86 @@ export const ivan: Persona = {
    */
   styleGuard(text: string): string {
     return forceMediumSkinTone(limitEmojis(text, 1));
+  },
+
+  greeting(firstName) {
+    const name = firstName ? ` ${firstName}` : '';
+    return (
+      `Ya${name}, tudo fixe? 🤝🏽\n\n` +
+      `Sou o ${env.IVAN_NAME}, sou eu mesmo que te respondo por aqui.\n\n` +
+      'Diz-me lá, o que é que andas à procura?'
+    );
+  },
+
+  fallbackReply(firstName) {
+    const name = firstName ? `${firstName}, ` : '';
+    return `${name}deu-me aqui um bug bro. Manda outra vez daqui a bocado?`;
+  },
+
+  proofAcknowledgement(firstName) {
+    const name = firstName ? `, ${firstName}` : '';
+    return (
+      `Recebido o print${name}! 💸\n\n` +
+      'Vou validar a tua conta e liberto-te o acesso já a seguir.'
+    );
+  },
+
+  nonTextNudge: 'Manda-me antes por texto mano, assim é mais fácil.',
+
+  /**
+   * Os guioes dele, vindos da branch feature/ivan-rodrigues.
+   *
+   * O `link_parado` nao existia lá — aquela branch tinha tres publicos e a main
+   * tem quatro — e por isso e novo: mesmo angulo dos outros, em registo de rua.
+   */
+  remarketing: {
+    briefs: {
+      nao_convertido: `Estes leads falaram contigo e nao entraram. Mensagem curta,
+de rua, a dar a sensacao de estarem a perder o que esta a acontecer agora.
+Termina com uma pergunta facil. Sem link e sem repetir condicoes.`,
+      link_parado: `Este lead recebeu o link ha pouco e ficou calado. Nao esta a
+recusar, travou em alguma coisa. Pergunta onde e que ele parou e oferece ajuda.
+PROIBIDO falar de deposito ou de valores: o que falta saber e onde ele ficou.`,
+      vip: `Estes leads ja estao no grupo. Puxa-os de volta para verem os sinais do
+dia. Tom de parceiro, nada de vendas.`,
+      promessa: `Este lead disse que tratava disto a esta hora e tu ficaste de lhe
+mandar mensagem. E o cumprimento do combinado, nao uma cobranca.`,
+    },
+    fallbacks: {
+      nao_convertido: [
+        'Ya {nome}, o robo hoje anda a puxar 🎰 ainda queres entrar?',
+        'Bro, o pessoal la dentro ja apanhou os sinais de hoje 💸 ainda tens interesse?',
+        '{nome}, tas fixe? O grupo hoje voltou a andar. Queres entrar ou esqueço?',
+      ],
+      link_parado: [
+        'Ya {nome}, a pagina abriu? Se deu erro diz-me que eu resolvo isso contigo.',
+        'Bro, ficaste com a conta feita ou travaste? Diz-me onde e que paraste 🤝🏽',
+        '{nome}, conseguiste? Se precisares faço isso contigo passo a passo.',
+      ],
+      vip: [
+        'Boas parceiro! Ja viste os sinais de hoje? 🎰',
+        '{nome}, o robo ja mandou os sinais 💰 da la um salto ao grupo.',
+        'Ya {nome}, passa pelo grupo para veres o que saiu hoje.',
+      ],
+      promessa: [
+        'Ya {nome}, ja tens um bocado? 🤝🏽 Os sinais da noite saem daqui a nada.',
+        'Bro, conforme combinado aqui estou eu. Ja consegues tratar disso?',
+        '{nome}, ficou combinado apitar-te a esta hora. Ainda vais a tempo 🚀',
+      ],
+    },
+    // Sem guiao por toque: a campanha dele repete o brief geral, com fallbacks
+    // diferentes a cada envio. Se um dia precisar de angulos por toque, entra aqui.
+    disparos: {
+      nao_qualificado: [
+        'Mano, o robo hoje anda a puxar 🎰 bora fechar o teu registo?',
+        'Ya {nome}, o pessoal la dentro ja apanhou os sinais de hoje. Falta-te so o registo 💸',
+        '{nome}, ainda estas de fora. Bora tratar disso hoje?',
+      ],
+      qualificado: [
+        'Fala parceiro! Ja viste os sinais de hoje no grupo? 🎰',
+        'Tudo bem {nome}? Como e que te tem corrido la dentro?',
+        '{nome}, passa pelo grupo para veres o que saiu hoje 💰',
+      ],
+    },
   },
 };

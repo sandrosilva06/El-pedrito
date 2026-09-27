@@ -12,13 +12,13 @@ import {
   type RemarketingAudience,
 } from '../db/database';
 import {
-  NAO_CONVERTIDO_TOUCHES,
-  TOQUE_PERSISTENTE,
+  toquePersistente,
   generateRemarketingMessage,
   personalise,
 } from '../services/remarketing';
 import { createLogger } from '../utils/logger';
 import { IDS_PERSONA, type IdPersona } from '../personas/ids';
+import { personaDe } from '../personas';
 import { canalDe, canalParaChat } from '../telegram/canal';
 import { nowInTimezone } from '../utils/timezone';
 import { bot } from '../telegram/bot';
@@ -75,6 +75,9 @@ async function sendToAudience(
   slot: string,
   date: string,
 ): Promise<void> {
+  // O objecto da persona, para os guioes e o nome dela vierem do sitio certo.
+  const obj = personaDe(persona);
+
   // A reserva e por (slot, dia, publico) e vive na base de dados: o Render
   // reinicia o servico a toda a hora, e sem isto cada reinicio dentro da
   // janela reenviaria a campanha inteira.
@@ -119,9 +122,10 @@ async function sendToAudience(
 
     // Do terceiro toque em diante e sempre o guiao persistente: e o unico
     // escrito para se repetir sem cansar.
-    const guiao = audience === 'nao_convertido' ? Math.min(touch, TOQUE_PERSISTENTE) : touch;
+    const guiao =
+      audience === 'nao_convertido' ? Math.min(touch, toquePersistente(obj)) : touch;
 
-    const { template, generated } = await generateRemarketingMessage(audience, guiao);
+    const { template, generated } = await generateRemarketingMessage(obj, audience, guiao);
     log.info(
       `slot ${slot} (${audience}, toque ${touch + 1}): ${targets.length} leads, ` +
         `mensagem ${generated ? 'gerada' : 'de reserva'}`,
@@ -206,7 +210,7 @@ async function sendDuePromises(persona: IdPersona): Promise<void> {
   const due = await getDuePromises(persona, new Date().toISOString(), 100);
   if (due.length === 0) return;
 
-  const { template, generated } = await generateRemarketingMessage('promessa');
+  const { template, generated } = await generateRemarketingMessage(personaDe(persona), 'promessa');
   log.info(`${due.length} promessa(s) vencida(s), mensagem ${generated ? 'gerada' : 'de reserva'}`);
 
   for (const lead of due) {

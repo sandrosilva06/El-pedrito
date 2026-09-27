@@ -468,32 +468,6 @@ export function isReturningMarker(incoming: string): boolean {
  * o unico momento em que ele veio ter connosco. Alem disso e a unica forma de
  * garantir o "green atras de green" mesmo quando o Gemini esta em baixo.
  */
-function fallbackReply(lead: Lead, incoming: string): string {
-  const name = lead.firstName ? `${lead.firstName}, ` : '';
-
-  if (isReturningMarker(incoming)) {
-    const greeting = lead.firstName ? `Outra vez por aqui, ${lead.firstName}?` : 'Outra vez por aqui, bro?';
-
-    // A quem ainda esta na qualificacao nunca foi proposto nada, e perguntar-lhe
-    // se ja decidiu entrar denuncia o guiao. Retoma-se a conversa em vez de
-    // cobrar uma decisao que ninguem lhe pediu.
-    if (lead.stage === 'novo' || lead.stage === 'qualificacao') {
-      return (
-        `${greeting} Ficaste com alguma dúvida?\n\n` +
-        'O grupo por aqui tem andado bem, tem sido green atrás de green estes dias. ' +
-        'Diz-me só uma coisa para eu perceber se isto dá para ti: já costumas apostar ou seria a primeira vez?'
-      );
-    }
-
-    return (
-      `${greeting} Já decidiste se vais entrar no grupo VIP ou vais continuar a adiar?\n\n` +
-      'A malta lá dentro está a faturar forte, tem sido green atrás de green estes dias. ' +
-      'Bora lá tratar do teu registo para não ficares a ver os outros a lucrar?'
-    );
-  }
-
-  return `${name}deu-me aqui um problema no sistema. Manda outra vez daqui a um bocadinho que eu respondo.`;
-}
 
 /**
  * Etapa 2 da cadeia: o redator recebe a diretriz do estrategista e o
@@ -577,5 +551,5 @@ export async function writeReply(params: {
     },
   });
 
-  return reply && reply.length > 0 ? reply : fallbackReply(lead, incoming);
+  return reply && reply.length > 0 ? reply : persona.fallbackReply(lead, incoming);
 }

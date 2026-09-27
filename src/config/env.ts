@@ -188,6 +188,27 @@ const schema = z
      * chega a um lead.
      */
     IVAN_BOT_TOKEN: optionalString,
+    /**
+     * Para onde vao os comprovativos dos leads do Ivan.
+     *
+     * Proprio, e nao o ADMIN_CHAT_IDS partilhado, por duas razoes que sao a
+     * mesma vista de dois lados. A de dentro: os prints de um influencer no
+     * canal do outro sao exatamente a mistura que este trabalho todo existe
+     * para evitar. A de fora: o aviso sai pelo bot da persona, e o bot do Ivan
+     * nao e membro do canal do El Pedrito — o envio falhava com "chat not
+     * found" e o print ficava guardado sem ninguem saber dele.
+     *
+     * Vazio, o Ivan recua para o ADMIN_CHAT_IDS: e melhor o print chegar ao
+     * canal errado do que nao chegar a lado nenhum.
+     */
+    IVAN_ADMIN_CHAT_IDS: optionalString.transform((value) =>
+      value === undefined
+        ? []
+        : value
+            .split(',')
+            .map((part) => Number(part.trim()))
+            .filter((part) => Number.isSafeInteger(part)),
+    ),
     MIN_AGE: intFromString(18, 0, 99),
     COMPLIANCE_NOTE: optionalString.transform(
       (value) =>

@@ -22,6 +22,7 @@ import { addMessage, upsertLead } from '../db/database';
 import { ivan } from '../personas/ivan';
 import { createLogger } from '../utils/logger';
 import { registarCanal, type Canal } from './canal';
+import { receberImagem, registarAvisador } from './comprovativos';
 import { pausarPorMedia } from './controlo';
 import { turnoDeCanal } from './bot';
 import { claimUpdate } from '../db/database';
@@ -122,14 +123,63 @@ export function iniciarBotIvan(): boolean {
     turnoDeCanal(PERSONA, chatId, texto);
   });
 
-  // Uma imagem pausa o atendimento: pode ser o comprovativo, pode ser o print de
-  // um erro, e a IA nao ve imagens. Quem decide e uma pessoa, pelo painel.
+  /**
+   * Uma imagem pausa o atendimento: pode ser o comprovativo, pode ser o print
+   * de um erro, e a IA nao ve imagens. Quem decide e uma pessoa.
+   *
+   * Ate aqui isto acusava a recepcao e mais nada — o print nao era guardado nem
+   * ia para canal nenhum, e o lead ficava a espera de uma validacao que nao
+   * tinha sido pedida a ninguem. Agora segue o mesmo caminho do El Pedrito,
+   * `receberImagem`, que guarda, escreve na conversa e avisa o CANAL DO IVAN.
+   *
+   * O que se mantem diferente e a resposta: o El Pedrito cala-se de proposito,
+   * o Ivan acusa a recepcao. E o registo dele, nao um descuido.
+   */
   botIvan.on([':photo', ':document'], async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId || ctx.chat?.type !== 'private') return;
 
-    await upsertLead({ chatId, persona: PERSONA, firstName: ctx.from?.first_name ?? null });
-    await pausarPorMedia(chatId, PERSONA);
+    const lead = await upsertLead({
+      chatId,
+      persona: PERSONA,
+      firstName: ctx.from?.first_name ?? null,
+      username: ctx.from?.username ?? null,
+    });
+
+    const message = ctx.message;
+
+    // A foto vem em varios tamanhos; o ultimo e o de maior resolucao, que e o
+    // unico em que se consegue ler o valor do comprovativo.
+    const foto = message?.photo?.[message.photo.length - 1];
+    const ficheiro = message?.document;
+
+    // Um PDF ou uma imagem enviada como ficheiro tambem servem de comprovativo;
+    // outros anexos, nao.
+    const ehImagem = ficheiro?.mime_type?.startsWith('image/') === true;
+    const ehPdf = ficheiro?.mime_type === 'application/pdf';
+    const fileId = foto?.file_id ?? (ehImagem || ehPdf ? ficheiro?.file_id : undefined);
+
+    if (!fileId || !message) {
+      await ctx.reply('Manda antes um print ou uma foto do comprovativo.');
+      return;
+    }
+
+    const { proofId, sentido } = await receberImagem(ivan, lead, {
+      fileId,
+      tipo: foto ? 'photo' : 'document',
+      messageId: message.message_id,
+      legenda: message.caption ?? '',
+    });
+
+    // Um print com queixa nao e entrega: ele mandou um erro a pedir ajuda, e o
+    // `receberImagem` ja deixou o funil livre para responder. Pausar aqui era
+    // cala-lo com um erro no ecra.
+    if (sentido !== 'problema') {
+      await pausarPorMedia(chatId, PERSONA);
+    }
+
+    log.info(`imagem #${proofId} de chat=${chatId} — sentido=${sentido}`);
+
     await ctx.reply(
       ivan.proofAcknowledgement?.(ctx.from?.first_name ?? null) ?? 'Recebido 👊🏽',
     );
@@ -146,6 +196,24 @@ export function iniciarBotIvan(): boolean {
   });
 
   registarCanal(canalDoIvan(botIvan));
+
+  // O canal de quem valida os depositos do Ivan. Proprio, porque o bot dele nao
+  // e membro do canal do El Pedrito: com um destino partilhado o envio falhava
+  // com "chat not found" e o print ficava guardado sem ninguem saber dele.
+  registarAvisador(PERSONA, {
+    async texto(chatId, texto) {
+      await botIvan.api.sendMessage(chatId, texto, {
+        link_preview_options: { is_disabled: true },
+      });
+    },
+    async foto(chatId, fileId, legenda) {
+      await botIvan.api.sendPhoto(chatId, fileId, { caption: legenda });
+    },
+    async documento(chatId, fileId, legenda) {
+      await botIvan.api.sendDocument(chatId, fileId, { caption: legenda });
+    },
+  });
+
   return true;
 }
 

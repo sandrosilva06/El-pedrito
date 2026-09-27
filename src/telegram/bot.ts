@@ -9,9 +9,7 @@ import {
   clearHistory,
   forgetLead,
   getRecentMessages,
-  clearDepositPromise,
   getStats,
-  recordDepositProof,
   setBettingExperience,
   setCanton,
   setHumanHandover,
@@ -36,9 +34,9 @@ import { sanitiseDashes } from '../utils/text';
 import { detectCanton } from '../utils/canton';
 import { detectBettingExperience } from '../utils/experience';
 import { comoTratar, extrairNome } from '../utils/nomes';
-import { sentidoDaImagem } from '../utils/legenda';
 import { nextOccurrenceUtc } from '../utils/timezone';
 import { canalParaChat, registarCanal, type Canal } from './canal';
+import { avisarDaEntrega, receberImagem, registarAvisador } from './comprovativos';
 import { type IdPersona } from '../personas/ids';
 import { personaDe } from '../personas';
 import type { Persona } from '../personas/types';
@@ -710,7 +708,7 @@ async function runFunnelTurn(
         stopTyping();
 
         log.info(`conversa entregue a mao chat=${chatId}: o lead falou em nao ter dinheiro`);
-        await notifyHandover(current, incoming);
+        await avisarDaEntrega(PERSONA, current, incoming);
         return;
       }
 
@@ -815,69 +813,34 @@ bot.on([':photo', ':document'], async (ctx) => {
     return;
   }
 
-  const proof = await recordDepositProof({
-    chatId: lead.chatId,
-    persona: PERSONA,
-    leadName: lead.firstName,
-    username: lead.username,
-    fileId,
-    messageId: message.message_id,
-  });
-
-  // Ele mexeu-se: nao faz sentido apitar-lhe o lembrete de deposito a seguir.
-  await clearDepositPromise(lead.chatId, PERSONA);
-
-  // A LEGENDA E QUE DECIDE o que a imagem e. A imagem sozinha nao diz nada:
-  // ja aconteceu o bot agradecer um "deposito" que era um print de um erro, e
-  // o lead bloqueou, com razao.
   const legenda = (message.caption ?? '').trim();
-  const sentido = sentidoDaImagem(legenda);
 
-  await addMessage({
-    chatId: lead.chatId,
-    persona: PERSONA,
-    role: 'user',
-    content:
-      legenda.length > 0
-        ? legenda
-        : '[o lead enviou uma imagem; ninguem lhe respondeu e ainda nao se sabe o que ela mostra]',
-    author: legenda.length > 0 ? 'bot' : 'sistema',
-    // O file_id vai junto para a caixa de entrada poder mostrar a imagem. Ate
-    // aqui ele so existia em deposit_proofs, que a caixa nao le, e a conversa
-    // ficava com um marcador de texto onde o lead tinha mandado um print.
-    mediaFileId: fileId,
-    mediaKind: fileKind === 'photo' ? 'photo' : 'document',
+  // Guardar, escrever na conversa e avisar quem valida e o mesmo para os dois
+  // influencers, e vive em `comprovativos.ts`. O que fica aqui e so o que e
+  // desta persona: o que se faz ao lead a seguir.
+  const { proofId, sentido } = await receberImagem(personaDe(PERSONA), lead, {
+    fileId,
+    tipo: fileKind,
+    messageId: message.message_id,
+    legenda,
   });
 
   if (sentido === 'problema') {
     // Ele mandou um print A PEDIR AJUDA. Calar o bot aqui e deixa-lo pendurado
     // com um erro no ecra: o funil responde e tenta resolver.
-    //
-    // A equipa e avisada na mesma, ANTES de sair daqui: um lead travado e
-    // precisamente o que alguem tem de ver, e nao so o que ja pagou.
-    log.info(`imagem #${proof.id} com queixa — chat=${lead.chatId}, o funil vai ajudar`);
-    await notifyAdmins(proof.id, lead, fileId, fileKind, sentido);
+    log.info(`imagem #${proofId} com queixa — chat=${lead.chatId}, o funil vai ajudar`);
     dispatchFunnelTurn(ctx, lead.chatId, legenda, { storeIncoming: false });
     return;
   }
 
-  if (sentido === 'comprovativo') {
-    await advanceStage(lead.chatId, PERSONA, 'comprovativo_recebido');
-  }
-
-  // Comprovativo ou imagem sem explicacao: a IA fica calada. Validar um
-  // deposito e uma decisao de uma pessoa, tomada fora do que o bot ve.
-  await setHumanHandover(lead.chatId, PERSONA, true);
   invalidateChat(lead.chatId);
 
   // Nenhuma resposta ao lead, de proposito. Ver o comentario no topo.
   log.info(
-    `imagem #${proof.id} recebida — chat=${lead.chatId} nome=${lead.firstName ?? '?'} ` +
+    `imagem #${proofId} recebida — chat=${lead.chatId} nome=${lead.firstName ?? '?'} ` +
       `username=${lead.username ? '@' + lead.username : '?'} ` +
       'reencaminhada para validacao, conversa passada para a mao',
   );
-
-  await notifyAdmins(proof.id, lead, fileId, fileKind, sentido);
 });
 
 /**
@@ -1029,103 +992,25 @@ export async function sendVipWelcome(lead: Lead): Promise<boolean> {
 }
 
 /**
- * Avisa-me de que uma conversa passou para as minhas maos.
+ * A ligacao do El Pedrito ao canal de quem valida.
  *
- * Sem isto a entrega era silenciosa: o bot calava-se e o lead ficava a espera
- * de uma resposta que so aparecia se eu abrisse a app por acaso. O aviso leva
- * o ID para eu o encontrar de imediato, e a mensagem dele para eu saber do que
- * se trata sem ter de abrir nada.
+ * As duas funcoes que aqui estavam — o aviso de entrega e o reencaminhamento do
+ * comprovativo — mudaram-se para `comprovativos.ts` quando o Ivan chegou: o
+ * caminho e o mesmo para os dois influencers, mas o destino nao e. Cada um tem
+ * o seu canal e o seu bot para la escrever, porque o bot de um nao e membro do
+ * canal do outro.
  */
-async function notifyHandover(lead: Lead, incoming: string): Promise<void> {
-  if (adminChatIds.size === 0) {
-    log.error(
-      `conversa do chat ${lead.chatId} entregue a mao, mas nao ha ADMIN_CHAT_IDS ` +
-        'para avisar: ve a caixa de entrada',
-    );
-    return;
-  }
-
-  const text =
-    'Conversa entregue a ti — o lead falou em dinheiro que nao tem\n\n' +
-    `Nome: ${lead.firstName || '(sem nome)'}\n` +
-    `Username: ${lead.username ? `@${lead.username}` : '(sem username)'}\n` +
-    `ID: ${lead.chatId}\n\n` +
-    `Ultima mensagem dele:\n"${incoming.slice(0, 500)}"\n\n` +
-    'O bot esta calado nesta conversa. Responde-lhe pela caixa de entrada.';
-
-  for (const adminId of adminChatIds) {
-    try {
-      await bot.api.sendMessage(adminId, text, { link_preview_options: { is_disabled: true } });
-    } catch (error) {
-      log.error(`falha ao avisar ${adminId} da entrega do chat ${lead.chatId}`, error);
-    }
-  }
-}
-
-async function notifyAdmins(
-  proofId: number,
-  lead: Lead,
-  fileId: string,
-  fileKind: 'photo' | 'document',
-  /** O que o lead escreveu por baixo, se escreveu. */
-  sentido: 'comprovativo' | 'problema' | 'indefinido' = 'indefinido',
-): Promise<void> {
-  if (adminChatIds.size === 0) {
-    log.error('sem destino de administracao: comprovativo guardado, mas ninguem foi avisado');
-    return;
-  }
-
-  // "FEITO" a cabeca quando o lead o escreveu: e o que a equipa de analise
-  // procura para saber que aquele print e um deposito para validar, e nao mais
-  // uma imagem qualquer a precisar de ser lida.
-  const cabecalho =
-    sentido === 'comprovativo'
-      ? 'FEITO — deposito para validar'
-      : sentido === 'problema'
-        ? `Imagem #${proofId} — o lead reportou um PROBLEMA (o funil esta a ajudar)`
-        : `Imagem #${proofId} — por validar`;
-
-  const caption =
-    `${cabecalho}\n\n` +
-    `Nome: ${lead.firstName ?? '(sem nome)'}\n` +
-    `Username: ${lead.username ? `@${lead.username}` : '(sem username)'}\n` +
-    `ID: ${lead.chatId}`;
-
-  let delivered = 0;
-
-  for (const adminId of adminChatIds) {
-    try {
-      // Reenvia por file_id: sem download nem reupload do ficheiro. Um PDF
-      // enviado por sendPhoto seria recusado, dai distinguir o tipo.
-      if (fileKind === 'photo') {
-        await bot.api.sendPhoto(adminId, fileId, { caption });
-      } else {
-        await bot.api.sendDocument(adminId, fileId, { caption });
-      }
-
-      delivered += 1;
-    } catch (error) {
-      log.error(`falha ao enviar o comprovativo #${proofId} para ${adminId}`, error);
-
-      // Sem o ficheiro, pelo menos os dados do lead chegam — dao para o
-      // encontrar a mao pelo ID.
-      try {
-        await bot.api.sendMessage(adminId, `${caption}\n\n(o ficheiro nao pode ser reenviado)`);
-        delivered += 1;
-      } catch (fallbackError) {
-        log.error(`nem o aviso de texto chegou a ${adminId}`, fallbackError);
-      }
-    }
-  }
-
-  if (delivered === 0) {
-    // O lead ficou a espera de uma validacao que nao foi pedida a ninguem.
-    log.error(
-      `comprovativo #${proofId} nao chegou a nenhum destino de administracao. ` +
-        'Confirma que o bot pertence ao grupo/canal e tem permissao para publicar.',
-    );
-  }
-}
+registarAvisador(PERSONA, {
+  async texto(chatId, texto) {
+    await bot.api.sendMessage(chatId, texto, { link_preview_options: { is_disabled: true } });
+  },
+  async foto(chatId, fileId, legenda) {
+    await bot.api.sendPhoto(chatId, fileId, { caption: legenda });
+  },
+  async documento(chatId, fileId, legenda) {
+    await bot.api.sendDocument(chatId, fileId, { caption: legenda });
+  },
+});
 
 bot.on('message', async (ctx) => {
   // Texto e comprovativos ja foram tratados acima. Aqui sobram audio,

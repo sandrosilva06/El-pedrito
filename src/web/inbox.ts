@@ -5,6 +5,9 @@ import { GrammyError, InputFile } from 'grammy';
 
 import { env } from '../config/env';
 import { ehIdPersona, type IdPersona } from '../personas/ids';
+import { todasAsPersonas } from '../personas';
+import { botIvan } from '../telegram/bot-ivan';
+import { temCanal } from '../telegram/canal';
 import {
   type Lead,
   addMessage,
@@ -110,12 +113,6 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
     return;
   }
 
-  const offered = req.get('x-inbox-proxy');
-  if (offered && env.INBOX_PROXY_SECRET && safeEqual(offered, env.INBOX_PROXY_SECRET)) {
-    next();
-    return;
-  }
-
   res.status(404).json({ error: 'not found' });
 }
 
@@ -125,59 +122,6 @@ function parseChatId(raw: string): number | null {
   return Number.isSafeInteger(chatId) ? chatId : null;
 }
 
-/**
- * Encaminha um pedido para o servico do outro bot.
- *
- * O proxy corre no servidor: o browser fala sempre com uma origem so, o que
- * dispensa CORS, um segundo login e ter o segredo do outro servico no
- * telemovel.
- */
-async function proxyToIvan(req: Request, res: Response): Promise<void> {
-  if (!env.IVAN_INBOX_URL || !env.INBOX_PROXY_SECRET) {
-    res.status(503).json({ error: 'o segundo bot nao esta configurado' });
-    return;
-  }
-
-  const target = `${env.IVAN_INBOX_URL.replace(/\/+$/, '')}/api${req.url}`;
-
-  // Imagens nao cabem em JSON. A subida leva os bytes tal como chegaram, e a
-  // descida devolve o que vier: sem isto o /ivan seria texto e mais nada.
-  const enviaBytes = Buffer.isBuffer(req.body) && req.body.length > 0;
-  const semCorpo = req.method === 'GET' || req.method === 'HEAD';
-
-  try {
-    const upstream = await fetch(target, {
-      method: req.method,
-      headers: {
-        'content-type': enviaBytes
-          ? (req.get('content-type') ?? 'application/octet-stream')
-          : 'application/json',
-        'x-inbox-proxy': env.INBOX_PROXY_SECRET,
-      },
-      body: semCorpo ? undefined : enviaBytes ? new Uint8Array(req.body) : JSON.stringify(req.body),
-      // O plano gratuito do Render hiberna: o primeiro pedido pode levar
-      // dezenas de segundos a acordar o servico.
-      signal: AbortSignal.timeout(60_000),
-    });
-
-    const tipo = upstream.headers.get('content-type') ?? '';
-
-    if (tipo.startsWith('application/json')) {
-      res.status(upstream.status).json(await upstream.json());
-      return;
-    }
-
-    // Tudo o resto sao bytes, tipicamente uma imagem vinda do /media do Ivan.
-    res.status(upstream.status);
-    res.setHeader('content-type', tipo || 'application/octet-stream');
-    const cache = upstream.headers.get('cache-control');
-    if (cache) res.setHeader('cache-control', cache);
-    res.send(Buffer.from(await upstream.arrayBuffer()));
-  } catch (error) {
-    log.error('falha ao falar com o servico do Ivan', error);
-    res.status(502).json({ error: 'o outro bot nao respondeu' });
-  }
-}
 
 
 /**
@@ -414,12 +358,23 @@ export function createInboxRouter(): Router {
   });
 
   /** Que bots a caixa conhece. O primeiro e sempre este servico. */
+  /**
+   * As abas da caixa: uma por influencer.
+   *
+   * Vem do registo de personas do proprio processo, e nao de uma variavel a
+   * apontar para outro servico. Por isso as duas estao SEMPRE listadas — nao ha
+   * um segundo serviço que possa estar a dormir e fazer desaparecer uma aba.
+   *
+   * O `ligado` diz se aquele influencer tem por onde falar agora. Uma aba de um
+   * bot desligado continua a mostrar as conversas: elas existem na base de dados
+   * e o operador tem de as poder ler.
+   */
   router.get('/bots', (_req, res) => {
-    const bots = [{ id: 'local', label: env.BOT_LABEL ?? env.AGENT_NAME, prefix: '' }];
-
-    if (env.IVAN_INBOX_URL && env.INBOX_PROXY_SECRET) {
-      bots.push({ id: 'ivan', label: 'Ivan Rodrigues', prefix: '/ivan' });
-    }
+    const bots = todasAsPersonas().map((persona) => ({
+      id: persona.id,
+      label: persona.id === 'el_pedrito' ? (env.BOT_LABEL ?? persona.agentName) : persona.agentName,
+      ligado: temCanal(persona.id),
+    }));
 
     res.json({ bots });
   });
@@ -620,6 +575,14 @@ export function createInboxRouter(): Router {
    * token do bot no caminho: servido ao browser, o token ficava no historico,
    * nos logs de rede e em qualquer captura de ecra da consola.
    */
+  /**
+   * Uma imagem da conversa.
+   *
+   * A persona decide qual BOT vai buscar o ficheiro, e isso nao e um detalhe: um
+   * file_id do Telegram so vale para o token que o recebeu. Ir busca-lo com o
+   * token errado devolve "file not found", e a imagem que o lead mandou nunca
+   * aparecia no painel.
+   */
   router.get('/media/:fileId', async (req, res) => {
     const fileId = req.params.fileId;
 
@@ -628,15 +591,29 @@ export function createInboxRouter(): Router {
       return;
     }
 
+    const persona = personaDoPedido(req);
+    if (!persona) {
+      res.status(400).json({ error: 'persona desconhecida' });
+      return;
+    }
+
+    const cliente = persona === 'ivan' ? botIvan : bot;
+    const token = persona === 'ivan' ? env.IVAN_BOT_TOKEN : env.TELEGRAM_BOT_TOKEN;
+
+    if (!cliente || !token) {
+      res.status(503).json({ error: 'o bot deste influencer nao esta ligado' });
+      return;
+    }
+
     try {
-      const file = await bot.api.getFile(fileId);
+      const file = await cliente.api.getFile(fileId);
       if (!file.file_path) {
         res.status(404).json({ error: 'ficheiro sem caminho' });
         return;
       }
 
       const upstream = await fetch(
-        `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`,
+        `https://api.telegram.org/file/bot${token}/${file.file_path}`,
         { signal: AbortSignal.timeout(30_000) },
       );
 
@@ -796,16 +773,6 @@ export function createInboxRouter(): Router {
 
     res.json({ ok: true, stage, linkEnviado: true });
   });
-
-  // --- O outro bot ---------------------------------------------------------
-
-  // O express.json do router so pega em application/json, portanto os bytes de
-  // uma imagem chegariam aqui por ler. Este raw trata disso antes do proxy.
-  router.all(
-    '/ivan/*',
-    express.raw({ type: 'image/*', limit: MAX_IMAGE_BYTES }),
-    (req, res) => void proxyToIvan(req, res),
-  );
 
   return router;
 }

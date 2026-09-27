@@ -369,14 +369,6 @@ const schema = z
      * caixa nenhuma do que haver uma aberta a quem passar pelo endereco.
      */
     ADMIN_PASSWORD: optionalString,
-    /**
-     * Segredo partilhado entre os servicos dos dois bots. O servico que serve
-     * a pagina usa-o para ler os dados do outro, sem obrigar o browser a
-     * autenticar-se duas vezes nem a falar com duas origens.
-     */
-    INBOX_PROXY_SECRET: optionalString,
-    /** Endereco do servico do Ivan, para o proxy. Vazio = so ha um bot. */
-    IVAN_INBOX_URL: optionalString,
     /** Nome deste bot na caixa de entrada. */
     BOT_LABEL: optionalString,
   });

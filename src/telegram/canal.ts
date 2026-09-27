@@ -103,6 +103,18 @@ export function temUserbot(): boolean {
 }
 
 /**
+ * Este influencer tem por onde falar agora?
+ *
+ * O painel usa isto para dizer, em cada aba, se aquele bot esta a atender. Uma
+ * aba de um influencer desligado continua a mostrar as conversas — elas estao na
+ * base de dados, e o operador tem de as poder ler de qualquer forma.
+ */
+export function temCanal(persona: IdPersona): boolean {
+  if (persona === 'ivan') return canais.has('bot_ivan');
+  return canais.has('bot') || canais.has('userbot');
+}
+
+/**
  * Por onde e que se fala com este lead.
  *
  * Em memoria porque isto e consultado uma vez por BOLHA, e uma resposta sao

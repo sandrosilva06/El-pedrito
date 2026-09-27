@@ -67,7 +67,34 @@ export const ADMIN_HTML = String.raw`<!doctype html>
   }
 
   /* --- lista --- */
-  #lista .filtros { padding: 10px 12px; display: flex; gap: 8px; }
+  #lista .abas {
+      display: flex;
+      gap: 2px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--linha);
+    }
+    .abas button {
+      flex: 1;
+      padding: 10px 8px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: none;
+      color: var(--suave);
+      font: inherit;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .abas button.activa {
+      color: var(--texto);
+      border-bottom-color: var(--acento);
+      font-weight: 600;
+    }
+    /* Um ponto ao lado do nome quando aquele bot nao esta a atender. */
+    .abas button .apagado {
+      color: var(--suave);
+      font-size: 11px;
+    }
+    .filtros { padding: 10px 12px; display: flex; gap: 8px; }
   #lista .filtros select { width: auto; flex-shrink: 0; }
   .conversas { flex: 1; overflow-y: auto; }
   .conversa {
@@ -213,8 +240,8 @@ export const ADMIN_HTML = String.raw`<!doctype html>
     <button class="icone" id="ir-conta" title="Conta do El Pedrito">☰</button>
     <button class="icone" id="sair" title="Sair">⎋</button>
   </div>
+  <div class="abas" id="abas"></div>
   <div class="filtros">
-    <select id="bot"></select>
     <input type="search" id="procurar" placeholder="Procurar por nome">
   </div>
   <div class="conversas" id="conversas"></div>
@@ -318,7 +345,9 @@ export const ADMIN_HTML = String.raw`<!doctype html>
 
 <script>
 const $ = (id) => document.getElementById(id);
-let prefixo = '';           // '' para este bot, '/ivan' para o outro
+// Qual das abas esta aberta. Vai em TODOS os pedidos: e assim que o servidor
+// sabe de que influencer sao as conversas que se estao a pedir.
+let persona = 'el_pedrito';
 let chatAberto = null;
 let leadAberto = null;
 let temporizador = null;
@@ -328,7 +357,8 @@ function mostrar(ecra) {
 }
 
 async function api(caminho, opcoes = {}) {
-  const r = await fetch('/api' + prefixo + caminho, {
+  const juncao = caminho.includes('?') ? '&' : '?';
+  const r = await fetch('/api' + caminho + juncao + 'persona=' + persona, {
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     ...opcoes,
@@ -543,8 +573,29 @@ $('conta-copiar').addEventListener('click', async () => {
 // --- lista ---
 async function carregarBots() {
   const { bots } = await api('/bots');
-  $('bot').innerHTML = bots.map((b) => '<option value="' + b.prefix + '">' + b.label + '</option>').join('');
-  $('bot').hidden = bots.length < 2;
+
+  $('abas').innerHTML = bots.map((b) =>
+    '<button data-persona="' + b.id + '"' + (b.id === persona ? ' class="activa"' : '') + '>' +
+    b.label + (b.ligado ? '' : ' <span class="apagado">desligado</span>') +
+    '</button>').join('');
+
+  for (const botao of $('abas').querySelectorAll('button')) {
+    botao.addEventListener('click', () => {
+      if (botao.dataset.persona === persona) return;
+      persona = botao.dataset.persona;
+      for (const outro of $('abas').querySelectorAll('button')) {
+        outro.classList.toggle('activa', outro.dataset.persona === persona);
+      }
+      // Fecha a conversa aberta: ela e do outro influencer, e mostra-la nesta
+      // aba era exactamente a mistura que nao pode acontecer.
+      chatAberto = null;
+      leadAberto = null;
+      mostrar('lista');
+      carregarLista();
+    });
+  }
+
+  $('abas').hidden = bots.length < 2;
 }
 
 async function carregarLista() {
@@ -590,11 +641,6 @@ function escapar(s) {
 $('procurar').addEventListener('input', () => {
   clearTimeout($('procurar').t);
   $('procurar').t = setTimeout(carregarLista, 250);
-});
-
-$('bot').addEventListener('change', () => {
-  prefixo = $('bot').value;
-  carregarLista();
 });
 
 // --- conversa ---
@@ -664,8 +710,9 @@ async function actualizarConversa(irAoFundo) {
         : '';
       return (
         '<div class="bolha ' + classe + '">' +
-          '<img loading="lazy" alt="imagem" src="/api' + prefixo + '/media/' +
-            encodeURIComponent(m.mediaFileId) + '" onclick="ampliar(this.src)">' +
+          '<img loading="lazy" alt="imagem" src="/api/media/' +
+            encodeURIComponent(m.mediaFileId) + '?persona=' + persona +
+            '" onclick="ampliar(this.src)">' +
           legenda + meta +
         '</div>'
       );
@@ -874,7 +921,7 @@ $('previa-enviar').addEventListener('click', async () => {
   try {
     const legenda = encodeURIComponent($('previa-legenda').value.trim());
     const r = await fetch(
-      '/api' + prefixo + '/leads/' + chatAberto + '/image?caption=' + legenda,
+      '/api/leads/' + chatAberto + '/image?caption=' + legenda + '&persona=' + persona,
       {
         method: 'POST',
         credentials: 'same-origin',

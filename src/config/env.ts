@@ -138,6 +138,54 @@ const schema = z
      */
     GIVEAWAY_CLAIM: optionalString.transform((value) => value ?? ''),
 
+
+    // --- Ivan Rodrigues ----------------------------------------------------
+    //
+    // O Ivan corre no MESMO servico que o El Pedrito, num bot proprio. O prefixo
+    // IVAN_ nao e decoracao: as variaveis sem prefixo continuam a ser do El
+    // Pedrito, e uma partilhada fazia um influencer herdar os numeros do outro.
+    IVAN_NAME: optionalString.transform((value) => value ?? 'Ivan Rodrigues'),
+    IVAN_MIN_DEPOSIT: optionalString.transform((value) => value ?? '25€'),
+    /**
+     * Lifestyle que o Ivan refere como prova de que o caminho existe.
+     *
+     * Fica em variavel e nao fixo no prompt porque sao afirmacoes de facto sobre
+     * bens e ganhos, ditas ao lead antes de ele depositar: a responsabilidade
+     * por elas e de quem opera o bot, nao do codigo. VAZIA, ele deixa de falar
+     * em carros, casas e montantes, e tem instrucao para nao inventar nenhum.
+     */
+    IVAN_LIFESTYLE_CLAIM: optionalString.transform((value) => value ?? ''),
+    /** Historia de origem, pela mesma regra. Vazia, nao conta nenhuma. */
+    IVAN_STORY_CLAIM: optionalString.transform((value) => value ?? ''),
+    /** Banca aconselhada, nao exigida. O minimo e o IVAN_MIN_DEPOSIT. */
+    IVAN_SUGGESTED_DEPOSIT: optionalString.transform((value) => value ?? '50€'),
+    /**
+     * Como se comportam os levantamentos na casa. E uma afirmacao sobre o
+     * servico de um terceiro, por isso fica aqui. Vazia, ele nao fala em prazos.
+     */
+    IVAN_WITHDRAWAL_CLAIM: optionalString.transform((value) => value ?? ''),
+    /**
+     * Quantas bolhas seguidas o Ivan manda. Mais do que o El Pedrito porque ele
+     * escreve aos gritos curtos: 15 palavras por mensagem.
+     */
+    IVAN_MAX_BUBBLES: intFromString(4, 1, 8),
+    /**
+     * As casas do Ivan. A Plan Bet e a principal: e por ela que o funil comeca,
+     * e as outras so entram se o lead ja la tiver conta.
+     *
+     * Vazias por omissao, como todas as afirmacoes configuraveis deste projecto:
+     * so se configura o que existe mesmo. SEM a Plan Bet o Ivan nao tem para
+     * onde mandar ninguem e nao converte nada.
+     */
+    PLANBET_LINK: optionalString.transform((value) => value ?? ''),
+    CASINO22_LINK: optionalString.transform((value) => value ?? ''),
+    GINJA_LINK: optionalString.transform((value) => value ?? ''),
+    /**
+     * O token do bot do Ivan. VAZIO = o Ivan nao arranca, e o El Pedrito nao da
+     * por nada. E o interruptor: enquanto isto nao estiver posto, nada do Ivan
+     * chega a um lead.
+     */
+    IVAN_BOT_TOKEN: optionalString,
     MIN_AGE: intFromString(18, 0, 99),
     COMPLIANCE_NOTE: optionalString.transform(
       (value) =>

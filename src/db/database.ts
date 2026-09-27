@@ -738,6 +738,7 @@ const SQL = {
      WHERE chat_id = ? AND persona = ?
   `,
   markBlocked: "UPDATE leads SET blocked = 1 WHERE chat_id = ? AND persona = ?",
+  markUnblocked: 'UPDATE leads SET blocked = 0 WHERE chat_id = ? AND persona = ? AND blocked = 1',
   cancelRemarketing: `
     UPDATE leads
        SET remarketing_cancelled = 1
@@ -1122,6 +1123,18 @@ export async function addMessage(input: {
       input.mediaKind ?? (input.mediaFileId ? 'photo' : null),
       input.directive ?? null,]);
     await conn().run(SQL.bumpMessageCount, [input.chatId, input.persona]);
+
+    // Ele ESCREVEU-NOS. Quem bloqueou nao escreve, portanto a marca de bloqueio,
+    // se existir, esta errada e sai aqui.
+    //
+    // E aqui e nao em cada bot porque este e o unico sitio por onde passam
+    // todas as entradas — o bot do El Pedrito, a conta dele, o bot do Ivan, as
+    // imagens. Uma marca posta por engano nao se desfaz sozinha: o lead sai de
+    // todas as campanhas, nunca mais leva uma mensagem, e ninguem da por isso
+    // porque nao ha erro nenhum a acontecer. Esta linha e a rede.
+    if (input.role === 'user') {
+      await conn().run(SQL.markUnblocked, [input.chatId, input.persona]);
+    }
   });
 
   // A caixa de entrada ouve isto e mostra a mensagem no instante em que ela
@@ -1396,6 +1409,23 @@ export async function markRemarketed(chatId: number,
 export async function markBlocked(chatId: number,
   persona: IdPersona): Promise<void> {
   await conn().run(SQL.markBlocked, [chatId, persona]);
+}
+
+/**
+ * Afinal nao bloqueou: apaga a marca.
+ *
+ * Chama-se quando ha PROVA do contrario — uma mensagem nossa que chegou, ou
+ * uma mensagem dele que entrou. Quem bloqueou nao recebe nem escreve.
+ *
+ * Existe porque a marca ja esteve errada e voltara a estar: e posta a partir do
+ * que o Telegram responde, e o Telegram responde a mesma coisa ("chat not
+ * found") a quem bloqueou e a quem nunca falou com aquele bot. Um lead marcado
+ * por engano sai de TODAS as campanhas e nunca mais leva uma mensagem — e uma
+ * marca dessas nao se desfaz sozinha se ninguem a desfizer. Isto desfaz.
+ */
+export async function markUnblocked(chatId: number,
+  persona: IdPersona): Promise<void> {
+  await conn().run(SQL.markUnblocked, [chatId, persona]);
 }
 
 /**

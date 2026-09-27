@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import express, { type NextFunction, type Request, type Response, type Router } from 'express';
-import { GrammyError, InputFile } from 'grammy';
+import { GrammyError, InputFile, type Bot } from 'grammy';
 
 import { env } from '../config/env';
 import { ehIdPersona, type IdPersona } from '../personas/ids';
@@ -15,6 +15,7 @@ import {
   getMessagesPage,
   listInboxLeads,
   markBlocked,
+  markUnblocked,
   setHumanHandover,
   setPinned,
   setStage,
@@ -45,6 +46,36 @@ const TELEGRAM_MAX_CAPTION_LENGTH = 1024;
  * nao haver maneira de o transformar noutro caminho da API.
  */
 const FILE_ID_FORMAT = /^[A-Za-z0-9_-]{16,256}$/;
+
+/**
+ * O bot por onde se fala com os leads desta persona.
+ *
+ * Ate aqui o painel mandava tudo por `bot.api`, que e o do El Pedrito, fosse
+ * qual fosse a aba aberta. Para um lead do Ivan isso e bater a porta de outra
+ * casa: ele nunca falou com aquele bot, e um bot nao pode escrever primeiro a
+ * quem nunca lhe falou. O Telegram respondia "chat not found".
+ */
+function clienteDaPersona(persona: IdPersona): Bot | null {
+  return persona === 'ivan' ? botIvan : bot;
+}
+
+/**
+ * O Telegram disse mesmo que este lead nos bloqueou?
+ *
+ * "chat not found" NAO conta, e e por isso que esta funcao existe. O Telegram
+ * devolve-o em dois casos muito diferentes: a quem bloqueou, e a quem nunca
+ * falou com aquele bot. Trata-los como o mesmo ja nos custou leads duas vezes —
+ * no remarketing, que os riscava de todas as campanhas, e aqui, que dizia a
+ * quem estava a escrever a mao que o lead tinha bloqueado quando o erro era
+ * nosso.
+ *
+ * Marcar a mais e caro e silencioso: o lead sai de todas as campanhas e nunca
+ * mais leva uma mensagem, e ninguem da por isso. Marcar a menos custa uma
+ * chamada falhada de vez em quando. Na duvida, nao se marca.
+ */
+function mesmoBloqueado(descricao: string): boolean {
+  return /bot was blocked|user is deactivated|bot can't initiate conversation/i.test(descricao);
+}
 
 /**
  * Chave de assinatura das sessoes.
@@ -440,6 +471,11 @@ export function createInboxRouter(): Router {
    * existe para a IA nao parecer uma maquina, e aqui quem escreve e mesmo uma
    * pessoa, que nao tem de esperar meio minuto para ver a sua propria mensagem
    * sair.
+   *
+   * Sai pelo bot DA PERSONA. Saia sempre pelo do El Pedrito, e para um lead do
+   * Ivan — que nunca falou com aquele bot — o Telegram respondia "chat not
+   * found", o painel lia isso como bloqueio e dizia a quem estava a escrever
+   * que o lead tinha bloqueado. Nao tinha: estavamos a bater a porta errada.
    */
   router.post('/leads/:chatId/reply', async (req, res) => {
     const chatId = parseChatId(req.params.chatId);
@@ -463,10 +499,19 @@ export function createInboxRouter(): Router {
       return;
     }
 
+    const cliente = clienteDaPersona(lead.persona);
+    if (!cliente) {
+      res.status(503).json({ error: 'o bot deste influencer nao esta ligado' });
+      return;
+    }
+
     try {
-      const sent = await bot.api.sendMessage(chatId, text, {
+      const sent = await cliente.api.sendMessage(chatId, text, {
         link_preview_options: { is_disabled: true },
       });
+
+      // Chegou: entao nao bloqueou. Se estava marcado, estava marcado por engano.
+      await markUnblocked(chatId, lead.persona);
 
       await addMessage({ chatId, persona: lead.persona, role: 'assistant', content: text, author: 'humano' });
 
@@ -480,7 +525,7 @@ export function createInboxRouter(): Router {
     } catch (error) {
       const description = error instanceof GrammyError ? error.description : String(error);
 
-      if (/bot was blocked|user is deactivated|chat not found/i.test(description)) {
+      if (mesmoBloqueado(description)) {
         await markBlocked(chatId, lead.persona);
         log.info(`chat ${chatId} bloqueou o bot; marcado`);
         res.status(409).json({ error: 'este lead bloqueou o bot', blocked: true });
@@ -528,10 +573,18 @@ export function createInboxRouter(): Router {
         return;
       }
 
+      const cliente = clienteDaPersona(lead.persona);
+      if (!cliente) {
+        res.status(503).json({ error: 'o bot deste influencer nao esta ligado' });
+        return;
+      }
+
       try {
-        const sent = await bot.api.sendPhoto(chatId, new InputFile(bytes, 'imagem.jpg'), {
+        const sent = await cliente.api.sendPhoto(chatId, new InputFile(bytes, 'imagem.jpg'), {
           ...(caption ? { caption } : {}),
         });
+
+        await markUnblocked(chatId, lead.persona);
 
         // O Telegram devolve varios tamanhos; o ultimo e o de maior resolucao,
         // que e o que vale a pena guardar para a conversa voltar a mostrar.
@@ -555,7 +608,7 @@ export function createInboxRouter(): Router {
       } catch (error) {
         const description = error instanceof GrammyError ? error.description : String(error);
 
-        if (/bot was blocked|user is deactivated|chat not found/i.test(description)) {
+        if (mesmoBloqueado(description)) {
           await markBlocked(chatId, lead.persona);
           log.info(`chat ${chatId} bloqueou o bot; marcado`);
           res.status(409).json({ error: 'este lead bloqueou o bot', blocked: true });
@@ -597,7 +650,7 @@ export function createInboxRouter(): Router {
       return;
     }
 
-    const cliente = persona === 'ivan' ? botIvan : bot;
+    const cliente = clienteDaPersona(persona);
     const token = persona === 'ivan' ? env.IVAN_BOT_TOKEN : env.TELEGRAM_BOT_TOKEN;
 
     if (!cliente || !token) {
@@ -691,10 +744,18 @@ export function createInboxRouter(): Router {
 
     const texto = guiaoDisparoManual(personaDe(lead.persona), tipo, lead.firstName);
 
+    const cliente = clienteDaPersona(lead.persona);
+    if (!cliente) {
+      res.status(503).json({ error: 'o bot deste influencer nao esta ligado' });
+      return;
+    }
+
     try {
-      const sent = await bot.api.sendMessage(chatId, texto, {
+      const sent = await cliente.api.sendMessage(chatId, texto, {
         link_preview_options: { is_disabled: true },
       });
+
+      await markUnblocked(chatId, lead.persona);
 
       // Gravada como 'sistema': nao foi a IA a compo-la nem fui eu a escreve-la,
       // saiu de um guiao. Continua a ser uma mensagem REAL enviada ao lead, por
@@ -706,7 +767,7 @@ export function createInboxRouter(): Router {
     } catch (error) {
       const description = error instanceof GrammyError ? error.description : String(error);
 
-      if (error instanceof GrammyError && /blocked|deactivated/i.test(description)) {
+      if (error instanceof GrammyError && mesmoBloqueado(description)) {
         await markBlocked(chatId, lead.persona);
       }
 

@@ -886,11 +886,17 @@ const SQL = {
      ORDER BY updated_at ASC
      LIMIT ?
   `,
+  // O `l.persona = m.persona` no JOIN e o filtro a seguir nao sao zelo: isto
+  // mete diretrizes REAIS de quem converteu dentro do prompt do estrategista.
+  // Sem eles, o prompt do Ivan levava lá dentro as frases que converteram para
+  // o El Pedrito — o vazamento mais discreto de todos, porque nao aparece em
+  // lado nenhum senao no texto que o modelo recebe.
   convertedDirectives: `
     SELECT m.directive AS directive
       FROM messages m
-      JOIN leads l ON l.chat_id = m.chat_id
-     WHERE l.stage IN (${CONVERTED_STAGES.map(() => '?').join(', ')})
+      JOIN leads l ON l.chat_id = m.chat_id AND l.persona = m.persona
+     WHERE l.persona = ?
+       AND l.stage IN (${CONVERTED_STAGES.map(() => '?').join(', ')})
        AND m.role = 'assistant'
        AND m.directive IS NOT NULL
        AND m.chat_id <> ?
@@ -909,6 +915,8 @@ const SQL = {
  * estrategista nao aprender com aquilo que acabou de dizer.
  */
 export async function getConversionPlaybook(params: {
+  /** So aprende com as conversoes do PROPRIO influencer. */
+  persona: IdPersona;
   excludeChatId: number;
   limit?: number;
 }): Promise<PlaybookEntry[]> {
@@ -916,7 +924,7 @@ export async function getConversionPlaybook(params: {
 
   // Le mais do que precisa porque a deduplicacao por objecao descarta muitas.
   const rows = asRows<{ directive: string }>(
-    await conn().all(SQL.convertedDirectives, [...CONVERTED_STAGES, params.excludeChatId, limit * 8]),
+    await conn().all(SQL.convertedDirectives, [params.persona, ...CONVERTED_STAGES, params.excludeChatId, limit * 8]),
   );
 
   const seen = new Set<string>();

@@ -807,7 +807,12 @@ export async function buildPrompt(params: {
 
   // Lido antes de montar o texto: o playbook vem da base de dados, e um
   // template string nao espera por uma promessa.
-  const playbook = await getConversionPlaybook({ excludeChatId: lead.chatId });
+  // A persona vem do proprio lead e nao de fora: o que se aprende de quem
+  // converteu tem de ser do MESMO influencer.
+  const playbook = await getConversionPlaybook({
+    persona: lead.persona,
+    excludeChatId: lead.chatId,
+  });
 
   return `CONTEXTO DO LEAD
 - chat_id: ${lead.chatId}

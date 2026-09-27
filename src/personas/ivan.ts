@@ -234,6 +234,10 @@ COMO FALAS — GAJO DE RUA, PT-PT:
 - A giria sai a conta-gotas, no meio da frase, como sai a quem fala assim
   todos os dias. Enfiar cinco girias na mesma mensagem soa a imitacao.
 - Tratamento por TU. NUNCA "voce".
+- O dinheiro FAZ-SE. "fazer guito", "fazer uns verdes", "por a render". NUNCA
+  "limpar guito": a palavra puxa o lado de quem tira dinheiro a alguem, e tu
+  passas a conversa toda a dizer o contrario — que o guito fica na conta DELE e
+  que tu nao recebes um cento.
 
 NUNCA PARECER ESCRITO POR UMA MAQUINA — isto denuncia mais do que tudo:
 - PROIBIDO frases de atendimento: "com certeza", "claro que sim", "sem duvida",
@@ -533,6 +537,29 @@ function contextoDoIvan(lead: Lead): string {
   ].join('\n');
 }
 
+/**
+ * O dinheiro FAZ-SE, nao se limpa.
+ *
+ * O modelo escrevia "se comecasses a limpar bom guito todas as semanas". A
+ * giria existe, mas "limpar" puxa o lado de quem tira dinheiro a alguem, e o
+ * funil inteiro esta construido a dizer o contrario — que o dinheiro fica na
+ * conta DELE e que o Ivan nao recebe um cento. A palavra desfaz a frase toda.
+ *
+ * Fica em codigo e nao so no prompt porque uma regra de prompt e uma sugestao
+ * forte: o modelo cumpre-a quase sempre, e o "quase" e uma mensagem ja enviada
+ * a um lead. Aqui e uma substituicao, e nao ha "quase".
+ *
+ * So no infinitivo seguido de uma palavra de dinheiro. "Limpar" tem usos
+ * legitimos — limpar a casa, limpar a cabeca — e trocar o verbo as cegas
+ * estragava frases que estao bem.
+ */
+function semLimpar(texto: string): string {
+  return texto.replace(
+    /\blimpar\b(?=(?:\s+\S+){0,2}\s+(?:guito|guita|cabedal|massa|verdes|dinheiro|nota))/gi,
+    (achado) => (achado[0] === 'L' ? 'Fazer' : 'fazer'),
+  );
+}
+
 export const ivan: Persona = {
   id: 'ivan',
   agentName: env.IVAN_NAME,
@@ -601,15 +628,21 @@ export const ivan: Persona = {
    * dependentes de o modelo se lembrar.
    */
   styleGuard(text: string): string {
-    return forceMediumSkinTone(limitEmojis(text, 1));
+    return forceMediumSkinTone(limitEmojis(semLimpar(text), 1));
   },
 
   greeting(firstName) {
     const name = firstName ? ` ${firstName}` : '';
+
+    // So o primeiro nome. O `IVAN_NAME` e o nome completo, que serve os prompts
+    // e a assinatura, mas a quem chega ele apresenta-se como se apresenta a
+    // alguem na rua — pelo nome, nao pelo nome e apelido.
+    const proprio = env.IVAN_NAME.trim().split(/\s+/)[0] || env.IVAN_NAME;
+
     return (
-      `Ya${name}, tudo fixe? 🤝🏽\n\n` +
-      `Sou o ${env.IVAN_NAME}, sou eu mesmo que te respondo por aqui.\n\n` +
-      'Diz-me lá, o que é que andas à procura?'
+      `Mekie${name}, tudo fixe?\n\n` +
+      `Sou o ${proprio} e estou aqui para te ajudar.\n\n` +
+      'Diz-me lá o que andas à procura?'
     );
   },
 

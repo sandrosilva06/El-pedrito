@@ -91,7 +91,12 @@ app.get('/stats', async (req, res) => {
     return;
   }
 
-  res.json(await getStats());
+  // Um numero por influencer, e nao um total: com dois bots no mesmo servico,
+  // uma soma escondia qual deles esta a converter e qual esta parado.
+  res.json({
+    el_pedrito: await getStats('el_pedrito'),
+    ivan: await getStats('ivan'),
+  });
 });
 
 /**
@@ -236,7 +241,7 @@ async function start(): Promise<void> {
   // Os leads recuperados dos logs vieram so com o chat_id e apareciam na caixa
   // de entrada como "#8962954467". O Telegram sabe o nome de quem ja falou com
   // o bot: isto vai busca-lo, em fundo para nao atrasar o arranque.
-  void preencherNomes(bot.api).catch((error: unknown) => {
+  void preencherNomes(bot.api, 'el_pedrito').catch((error: unknown) => {
     log.warn('falha a preencher nomes dos leads', error);
   });
 

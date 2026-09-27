@@ -26,6 +26,7 @@
 import { env } from '../config/env';
 import { addMessage, setTransporte, upsertLead } from '../db/database';
 import { createLogger } from '../utils/logger';
+import { type IdPersona } from '../personas/ids';
 import { registarCanal, type Canal } from './canal';
 import {
   aoComandoParar,
@@ -39,6 +40,13 @@ import {
 } from './controlo';
 
 const log = createLogger('userbot');
+
+/**
+ * Esta conta e do El Pedrito. Fixo e nao configuravel: o transporte e que
+ * decide a persona, e trocar isto por uma variavel era abrir a porta a que uma
+ * configuracao errada fizesse o El Pedrito falar como o Ivan na conta dele.
+ */
+const PERSONA: IdPersona = 'el_pedrito';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -192,31 +200,31 @@ export async function tratarMensagem(params: {
     // 2. Comando de controlo. Testado ANTES da regra do silencio, senao o
     //    proprio "/bot on" calava o bot que ele vem ligar.
     if (ehComandoRetomar(texto)) {
-      await aoComandoRetomar({ chatId, messageId, apagar, retomar });
+      await aoComandoRetomar({ chatId, persona: PERSONA, messageId, apagar, retomar });
       return 'comando-retomar';
     }
 
     if (ehComandoParar(texto)) {
-      await aoComandoParar({ chatId, messageId, apagar });
+      await aoComandoParar({ chatId, persona: PERSONA, messageId, apagar });
       return 'comando-parar';
     }
 
     const tag = tagDoComando(texto);
     if (tag) {
-      await aoComandoTag({ chatId, messageId, tag, apagar });
+      await aoComandoTag({ chatId, persona: PERSONA, messageId, tag, apagar });
       return 'comando-tag';
     }
 
     // 3. Escrevi a mao: o bot cala-se.
-    await aoOperadorEscrever({ chatId, texto, mediaKind, mediaFileId });
+    await aoOperadorEscrever({ chatId, persona: PERSONA, texto, mediaKind, mediaFileId });
     return 'manual';
   }
 
   // --- Mensagem do lead ---------------------------------------------------
-  const lead = await upsertLead({ chatId, firstName, username });
+  const lead = await upsertLead({ chatId, persona: PERSONA, firstName, username });
 
   if (lead.transporte !== 'userbot') {
-    await setTransporte(chatId, 'userbot');
+    await setTransporte(chatId, PERSONA, 'userbot');
   }
 
   // Uma imagem pausa o atendimento: pode ser o comprovativo, pode ser o print
@@ -224,13 +232,14 @@ export async function tratarMensagem(params: {
   if (mediaKind) {
     await addMessage({
       chatId,
+      persona: PERSONA,
       role: 'user',
       content: texto.trim(),
       mediaFileId,
       mediaKind,
     });
 
-    await pausarPorMedia(chatId);
+    await pausarPorMedia(chatId, PERSONA);
     return 'lead-media';
   }
 

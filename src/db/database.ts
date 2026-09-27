@@ -5,6 +5,8 @@ import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
 import { ehNotaInterna, eventos } from '../utils/eventos';
 import { openDriver, type Driver } from './driver';
+import { ehIdPersona, type IdPersona, PERSONA_HISTORICA } from '../personas/ids';
+import { migrarChaves } from './chaves';
 
 const log = createLogger('db');
 
@@ -59,6 +61,14 @@ export type MessageAuthor = 'bot' | 'humano' | 'sistema';
 
 export interface Lead {
   chatId: number;
+  /**
+   * De qual dos influencers e esta conversa.
+   *
+   * Faz parte da identidade do lead e nao e um detalhe: junto com o chatId e o
+   * que o identifica. A mesma pessoa pode ter uma conversa com cada um, e sao
+   * dois leads.
+   */
+  persona: IdPersona;
   /** Quando o lead disse que ia tratar disto (UTC), ou null. */
   promisedAt: string | null;
   /** O que ele disse, para o lembrete nao soar generico. */
@@ -79,7 +89,7 @@ export interface Lead {
    * utilizador. Guardado por lead, e nao global, porque a passagem de um para
    * o outro e gradual — quem ja falava com o bot continua no bot.
    */
-  transporte: 'bot' | 'userbot';
+  transporte: 'bot' | 'userbot' | 'bot_ivan';
   /**
    * Como se trata este lead. Vem do perfil do Telegram ou da resposta dele.
    *
@@ -207,6 +217,7 @@ interface LeadRow {
   last_name: string | null;
   pinned: number;
   transporte: string | null;
+  persona: string | null;
   tratamento: string | null;
   nome_perguntado: number;
   atencao: string | null;
@@ -284,10 +295,25 @@ export function databaseDialect(): 'sqlite' | 'postgres' {
  * e o formato que o SQLite ja usava. Assim todo o codigo que le, compara e
  * ordena datas continua igual.
  */
+/*
+ * As mensagens e os comprovativos deixaram de declarar uma chave estrangeira
+ * para leads(chat_id).
+ *
+ * Nao foi por gosto: a chave primaria dos leads e agora (chat_id, persona) — o
+ * mesmo chat_id existe duas vezes quando a mesma pessoa escreve aos dois bots —
+ * e uma chave estrangeira precisa de apontar para algo UNICO. Apontar so para o
+ * chat_id deixou de ser possivel, e no Postgres o CREATE TABLE recusava.
+ *
+ * Passar a apontar para as duas colunas era possivel, mas obrigava a persona a
+ * estar escrita nas duas pontas antes de qualquer insercao, e uma mensagem que
+ * chegue antes de o lead estar gravado passava a rebentar em vez de esperar. A
+ * integridade fica do lado do codigo, que nunca grava uma mensagem sem o lead.
+ */
 const DDL: Record<'sqlite' | 'postgres', string[]> = {
   sqlite: [
     `CREATE TABLE IF NOT EXISTS leads (
-      chat_id       INTEGER PRIMARY KEY,
+      chat_id       INTEGER NOT NULL,
+      persona       TEXT NOT NULL DEFAULT 'el_pedrito',
       first_name    TEXT,
       username      TEXT,
       language_code TEXT,
@@ -295,11 +321,12 @@ const DDL: Record<'sqlite' | 'postgres', string[]> = {
       notes         TEXT,
       message_count INTEGER NOT NULL DEFAULT 0,
       created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (chat_id, persona)
     )`,
     `CREATE TABLE IF NOT EXISTS messages (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      chat_id    INTEGER NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
+      chat_id    INTEGER NOT NULL,
       role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
       content    TEXT NOT NULL,
       directive  TEXT,
@@ -307,7 +334,7 @@ const DDL: Record<'sqlite' | 'postgres', string[]> = {
     )`,
     `CREATE TABLE IF NOT EXISTS deposit_proofs (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      chat_id     INTEGER NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
+      chat_id     INTEGER NOT NULL,
       lead_name   TEXT,
       username    TEXT,
       file_id     TEXT NOT NULL,
@@ -317,16 +344,19 @@ const DDL: Record<'sqlite' | 'postgres', string[]> = {
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
     `CREATE TABLE IF NOT EXISTS processed_updates (
-      update_id  INTEGER PRIMARY KEY,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      update_id  INTEGER NOT NULL,
+      bot        TEXT NOT NULL DEFAULT 'el_pedrito',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (update_id, bot)
     )`,
     `CREATE TABLE IF NOT EXISTS remarketing_runs (
       slot       TEXT NOT NULL,
       run_date   TEXT NOT NULL,
       audience   TEXT NOT NULL,
       sent       INTEGER NOT NULL DEFAULT 0,
+      persona    TEXT NOT NULL DEFAULT 'el_pedrito',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      PRIMARY KEY (slot, run_date, audience)
+      PRIMARY KEY (slot, run_date, audience, persona)
     )`,
     `CREATE TABLE IF NOT EXISTS app_meta (
       chave      TEXT PRIMARY KEY,
@@ -336,7 +366,8 @@ const DDL: Record<'sqlite' | 'postgres', string[]> = {
   ],
   postgres: [
     `CREATE TABLE IF NOT EXISTS leads (
-      chat_id       BIGINT PRIMARY KEY,
+      chat_id       BIGINT NOT NULL,
+      persona       TEXT NOT NULL DEFAULT 'el_pedrito',
       first_name    TEXT,
       username      TEXT,
       language_code TEXT,
@@ -344,11 +375,12 @@ const DDL: Record<'sqlite' | 'postgres', string[]> = {
       notes         TEXT,
       message_count INTEGER NOT NULL DEFAULT 0,
       created_at    TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
-      updated_at    TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+      updated_at    TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+      PRIMARY KEY (chat_id, persona)
     )`,
     `CREATE TABLE IF NOT EXISTS messages (
       id         BIGSERIAL PRIMARY KEY,
-      chat_id    BIGINT NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
+      chat_id    BIGINT NOT NULL,
       role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
       content    TEXT NOT NULL,
       directive  TEXT,
@@ -356,7 +388,7 @@ const DDL: Record<'sqlite' | 'postgres', string[]> = {
     )`,
     `CREATE TABLE IF NOT EXISTS deposit_proofs (
       id          BIGSERIAL PRIMARY KEY,
-      chat_id     BIGINT NOT NULL REFERENCES leads(chat_id) ON DELETE CASCADE,
+      chat_id     BIGINT NOT NULL,
       lead_name   TEXT,
       username    TEXT,
       file_id     TEXT NOT NULL,
@@ -366,16 +398,19 @@ const DDL: Record<'sqlite' | 'postgres', string[]> = {
       created_at  TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     )`,
     `CREATE TABLE IF NOT EXISTS processed_updates (
-      update_id  BIGINT PRIMARY KEY,
-      created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+      update_id  BIGINT NOT NULL,
+      bot        TEXT NOT NULL DEFAULT 'el_pedrito',
+      created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+      PRIMARY KEY (update_id, bot)
     )`,
     `CREATE TABLE IF NOT EXISTS remarketing_runs (
       slot       TEXT NOT NULL,
       run_date   TEXT NOT NULL,
       audience   TEXT NOT NULL,
       sent       INTEGER NOT NULL DEFAULT 0,
+      persona    TEXT NOT NULL DEFAULT 'el_pedrito',
       created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
-      PRIMARY KEY (slot, run_date, audience)
+      PRIMARY KEY (slot, run_date, audience, persona)
     )`,
     `CREATE TABLE IF NOT EXISTS app_meta (
       chave      TEXT PRIMARY KEY,
@@ -420,6 +455,17 @@ const COLUNAS: Array<{ tabela: string; coluna: string; sqlite: string; postgres:
   { tabela: 'leads', coluna: 'oficio_pedrito', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'leads', coluna: 'tag', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'leads', coluna: 'perguntas_feitas', sqlite: 'TEXT', postgres: 'TEXT' },
+  // --- De quem e este lead: entra na chave primaria, por isso nunca e nulo ---
+  //
+  // O DEFAULT trata dos leads que ja estao na base de dados: sao todos do El
+  // Pedrito, que era o unico influencer quando foram criados.
+  { tabela: 'leads', coluna: 'persona', sqlite: "TEXT NOT NULL DEFAULT 'el_pedrito'", postgres: "TEXT NOT NULL DEFAULT 'el_pedrito'" },
+  { tabela: 'messages', coluna: 'persona', sqlite: "TEXT NOT NULL DEFAULT 'el_pedrito'", postgres: "TEXT NOT NULL DEFAULT 'el_pedrito'" },
+  { tabela: 'deposit_proofs', coluna: 'persona', sqlite: "TEXT NOT NULL DEFAULT 'el_pedrito'", postgres: "TEXT NOT NULL DEFAULT 'el_pedrito'" },
+  { tabela: 'remarketing_runs', coluna: 'persona', sqlite: "TEXT NOT NULL DEFAULT 'el_pedrito'", postgres: "TEXT NOT NULL DEFAULT 'el_pedrito'" },
+  // Qual dos bots entregou este update. Sem isto, as sequencias de update_id
+  // dos dois bots colidem e o segundo update e descartado como repetido.
+  { tabela: 'processed_updates', coluna: 'bot', sqlite: "TEXT NOT NULL DEFAULT 'el_pedrito'", postgres: "TEXT NOT NULL DEFAULT 'el_pedrito'" },
   { tabela: 'messages', coluna: 'author', sqlite: "TEXT NOT NULL DEFAULT 'bot'", postgres: "TEXT NOT NULL DEFAULT 'bot'" },
   { tabela: 'messages', coluna: 'media_file_id', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'messages', coluna: 'media_kind', sqlite: 'TEXT', postgres: 'TEXT' },
@@ -470,6 +516,11 @@ export async function initDatabase(): Promise<void> {
     await addColumnIfMissing(tabela, coluna, dialecto === 'postgres' ? postgres : sqlite);
   }
 
+  // Depois das colunas e antes dos indices: uma chave nao pode apontar para uma
+  // coluna que ainda nao existe, e um indice criado antes da reconstrucao da
+  // tabela desaparecia com ela.
+  await migrarChaves(driver);
+
   for (const indice of INDICES) {
     await driver.exec(indice);
   }
@@ -512,12 +563,16 @@ function toStage(value: string): FunnelStage {
 function mapLead(row: LeadRow): Lead {
   return {
     chatId: row.chat_id,
+    // Uma coluna de texto pode trazer qualquer coisa; um valor que nao seja um
+    // influencer conhecido fica no historico em vez de contaminar o funil.
+    persona: ehIdPersona(row.persona) ? row.persona : PERSONA_HISTORICA,
     promisedAt: row.promised_at,
     promiseNote: row.promise_note,
     canton: row.canton,
     lastName: row.last_name,
     pinned: row.pinned === 1,
-    transporte: row.transporte === 'userbot' ? 'userbot' : 'bot',
+    transporte:
+      row.transporte === 'userbot' || row.transporte === 'bot_ivan' ? row.transporte : 'bot',
     tratamento: row.tratamento,
     nomePerguntado: row.nome_perguntado === 1,
     atencao: row.atencao,
@@ -559,31 +614,40 @@ function mapMessage(row: MessageRow): StoredMessage {
 }
 
 const SQL = {
+  // A persona entra na insercao E no alvo do conflito: a chave e (chat_id,
+  // persona), e um ON CONFLICT(chat_id) sozinho deixou de corresponder a
+  // restricao nenhuma.
+  //
+  // O DO UPDATE nao mexe na persona de proposito. Ela e escrita uma vez, na
+  // criacao, e nunca mais: um lead nao troca de influencer a meio de uma
+  // conversa, e se algum dia uma chamada vier com a persona errada e melhor
+  // que nao aconteca nada do que o lead mudar de dono em silencio.
   upsertLead: `
-    INSERT INTO leads (chat_id, first_name, username, language_code)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(chat_id) DO UPDATE SET
+    INSERT INTO leads (chat_id, persona, first_name, username, language_code)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(chat_id, persona) DO UPDATE SET
       first_name    = COALESCE(excluded.first_name, leads.first_name),
       username      = COALESCE(excluded.username, leads.username),
       language_code = COALESCE(excluded.language_code, leads.language_code),
       updated_at    = datetime('now')
   `,
-  getLead: 'SELECT * FROM leads WHERE chat_id = ?',
+  getLead: 'SELECT * FROM leads WHERE chat_id = ? AND persona = ?',
+  getLeadQualquerPersona: 'SELECT * FROM leads WHERE chat_id = ?',
   updateStage: `
-    UPDATE leads SET stage = ?, updated_at = datetime('now') WHERE chat_id = ?
+    UPDATE leads SET stage = ?, updated_at = datetime('now') WHERE chat_id = ? AND persona = ?
   `,
   updateNotes: `
-    UPDATE leads SET notes = ?, updated_at = datetime('now') WHERE chat_id = ?
+    UPDATE leads SET notes = ?, updated_at = datetime('now') WHERE chat_id = ? AND persona = ?
   `,
   bumpMessageCount: `
     UPDATE leads
        SET message_count = message_count + 1,
            updated_at    = datetime('now')
-     WHERE chat_id = ?
+     WHERE chat_id = ? AND persona = ?
   `,
   insertMessage: `
-    INSERT INTO messages (chat_id, role, author, content, media_file_id, media_kind, directive)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (chat_id, persona, role, author, content, media_file_id, media_kind, directive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `,
   /**
    * Lista para a caixa de entrada: o lead, a ultima mensagem e quando foi.
@@ -603,12 +667,13 @@ const SQL = {
            -- gravada do lado do lead (role='user') sem ele ter escrito nada;
            -- a mensagem do remarketing e a de boas-vindas ao VIP tambem sao
            -- 'sistema', mas foram MESMO enviadas e tem de aparecer.
-           (SELECT content    FROM messages m WHERE m.chat_id = l.chat_id AND NOT (m.role = 'user' AND m.author = 'sistema' AND m.media_file_id IS NULL) ORDER BY m.id DESC LIMIT 1) AS last_content,
-           (SELECT role       FROM messages m WHERE m.chat_id = l.chat_id AND NOT (m.role = 'user' AND m.author = 'sistema' AND m.media_file_id IS NULL) ORDER BY m.id DESC LIMIT 1) AS last_role,
-           (SELECT created_at FROM messages m WHERE m.chat_id = l.chat_id AND NOT (m.role = 'user' AND m.author = 'sistema' AND m.media_file_id IS NULL) ORDER BY m.id DESC LIMIT 1) AS last_at,
-           (SELECT id         FROM messages m WHERE m.chat_id = l.chat_id ORDER BY m.id DESC LIMIT 1) AS last_id
+           (SELECT content    FROM messages m WHERE m.chat_id = l.chat_id AND m.persona = l.persona AND NOT (m.role = 'user' AND m.author = 'sistema' AND m.media_file_id IS NULL) ORDER BY m.id DESC LIMIT 1) AS last_content,
+           (SELECT role       FROM messages m WHERE m.chat_id = l.chat_id AND m.persona = l.persona AND NOT (m.role = 'user' AND m.author = 'sistema' AND m.media_file_id IS NULL) ORDER BY m.id DESC LIMIT 1) AS last_role,
+           (SELECT created_at FROM messages m WHERE m.chat_id = l.chat_id AND m.persona = l.persona AND NOT (m.role = 'user' AND m.author = 'sistema' AND m.media_file_id IS NULL) ORDER BY m.id DESC LIMIT 1) AS last_at,
+           (SELECT id         FROM messages m WHERE m.chat_id = l.chat_id AND m.persona = l.persona ORDER BY m.id DESC LIMIT 1) AS last_id
       FROM leads l
-     WHERE (? = '' OR lower(coalesce(l.first_name, '') || ' ' || coalesce(l.username, '')) LIKE '%' || ? || '%')
+     WHERE l.persona = ?
+       AND (? = '' OR lower(coalesce(l.first_name, '') || ' ' || coalesce(l.username, '')) LIKE '%' || ? || '%')
        AND (? = '' OR l.stage = ?)
     ) t
      -- O created_at so tem precisao ao segundo, portanto duas conversas
@@ -621,7 +686,8 @@ const SQL = {
   countInboxLeads: `
     SELECT COUNT(*) AS total
       FROM leads l
-     WHERE (? = '' OR lower(coalesce(l.first_name, '') || ' ' || coalesce(l.username, '')) LIKE '%' || ? || '%')
+     WHERE l.persona = ?
+       AND (? = '' OR lower(coalesce(l.first_name, '') || ' ' || coalesce(l.username, '')) LIKE '%' || ? || '%')
        AND (? = '' OR l.stage = ?)
   `,
   /**
@@ -633,55 +699,56 @@ const SQL = {
   messagesPage: `
     SELECT * FROM (
       SELECT * FROM messages
-       WHERE chat_id = ? AND (? = 0 OR id < ?)
+       WHERE chat_id = ? AND persona = ? AND (? = 0 OR id < ?)
        ORDER BY id DESC LIMIT ?
     ) ORDER BY id ASC
   `,
   setHandover: `
-    UPDATE leads SET human_handover = ?, updated_at = datetime('now') WHERE chat_id = ?
+    UPDATE leads SET human_handover = ?, updated_at = datetime('now') WHERE chat_id = ? AND persona = ?
   `,
   recentMessages: `
     SELECT * FROM (
-      SELECT * FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?
+      SELECT * FROM messages WHERE chat_id = ? AND persona = ? ORDER BY id DESC LIMIT ?
     ) ORDER BY id ASC
   `,
-  deleteMessages: 'DELETE FROM messages WHERE chat_id = ?',
-  deleteLead: 'DELETE FROM leads WHERE chat_id = ?',
-  countLeads: 'SELECT COUNT(*) AS total FROM leads',
-  countMessages: 'SELECT COUNT(*) AS total FROM messages',
-  countByStage: 'SELECT stage, COUNT(*) AS total FROM leads GROUP BY stage',
+  deleteMessages: 'DELETE FROM messages WHERE chat_id = ? AND persona = ?',
+  deleteLead: 'DELETE FROM leads WHERE chat_id = ? AND persona = ?',
+  countLeads: 'SELECT COUNT(*) AS total FROM leads WHERE persona = ?',
+  countMessages: 'SELECT COUNT(*) AS total FROM messages WHERE persona = ?',
+  countByStage: 'SELECT stage, COUNT(*) AS total FROM leads WHERE persona = ? GROUP BY stage',
   insertProof: `
-    INSERT INTO deposit_proofs (chat_id, lead_name, username, file_id, message_id)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO deposit_proofs (chat_id, persona, lead_name, username, file_id, message_id)
+    VALUES (?, ?, ?, ?, ?, ?)
     RETURNING id
   `,
-  countPendingProofs: "SELECT COUNT(*) AS total FROM deposit_proofs WHERE status = 'pendente'",
-  deleteProofs: 'DELETE FROM deposit_proofs WHERE chat_id = ?',
+  countPendingProofs: "SELECT COUNT(*) AS total FROM deposit_proofs WHERE persona = ? AND status = 'pendente'",
+  deleteProofs: 'DELETE FROM deposit_proofs WHERE chat_id = ? AND persona = ?',
   claimSlot: `
-    INSERT INTO remarketing_runs (slot, run_date, audience) VALUES (?, ?, ?)
+    INSERT INTO remarketing_runs (slot, run_date, audience, persona) VALUES (?, ?, ?, ?)
     ON CONFLICT DO NOTHING
   `,
   recordSlotSent: `
-    UPDATE remarketing_runs SET sent = ? WHERE slot = ? AND run_date = ? AND audience = ?
+    UPDATE remarketing_runs SET sent = ?
+     WHERE slot = ? AND run_date = ? AND audience = ? AND persona = ?
   `,
   markRemarketed: `
     UPDATE leads
        SET last_remarketing_at = datetime('now'),
            remarketing_touches = remarketing_touches + 1
-     WHERE chat_id = ?
+     WHERE chat_id = ? AND persona = ?
   `,
-  markBlocked: "UPDATE leads SET blocked = 1 WHERE chat_id = ?",
+  markBlocked: "UPDATE leads SET blocked = 1 WHERE chat_id = ? AND persona = ?",
   cancelRemarketing: `
     UPDATE leads
        SET remarketing_cancelled = 1
-     WHERE chat_id = ?
+     WHERE chat_id = ? AND persona = ?
        -- So conta como resposta AO remarketing. Quem escreve antes de ter
        -- levado algum toque esta so a conversar, e continua elegivel se
        -- depois arrefecer.
        AND last_remarketing_at IS NOT NULL
        AND remarketing_cancelled = 0
   `,
-  claimUpdate: 'INSERT INTO processed_updates (update_id) VALUES (?) ON CONFLICT DO NOTHING',
+  claimUpdate: 'INSERT INTO processed_updates (update_id, bot) VALUES (?, ?) ON CONFLICT DO NOTHING',
   pruneUpdates: `
     DELETE FROM processed_updates
      WHERE update_id NOT IN (
@@ -690,31 +757,31 @@ const SQL = {
   `,
   setCanton: `
     UPDATE leads SET canton = ?, updated_at = datetime('now')
-     WHERE chat_id = ? AND (canton IS NULL OR canton = '')
+     WHERE chat_id = ? AND persona = ? AND (canton IS NULL OR canton = '')
   `,
-  setPinned: 'UPDATE leads SET pinned = ? WHERE chat_id = ?',
-  setTransporte: 'UPDATE leads SET transporte = ? WHERE chat_id = ?',
-  setTag: "UPDATE leads SET tag = ?, updated_at = datetime('now') WHERE chat_id = ?",
+  setPinned: 'UPDATE leads SET pinned = ? WHERE chat_id = ? AND persona = ?',
+  setTransporte: 'UPDATE leads SET transporte = ? WHERE chat_id = ? AND persona = ?',
+  setTag: "UPDATE leads SET tag = ?, updated_at = datetime('now') WHERE chat_id = ? AND persona = ?",
   // Todos com a mesma guarda do setJob: a PRIMEIRA resposta e a que fica. Um
   // lead que se contradiz mais a frente nao faz o funil esquecer o que ele
   // disse primeiro, e uma escrita repetida nao apaga o que ja la estava.
   setTratamento: `
     UPDATE leads SET tratamento = ?, updated_at = datetime('now')
-     WHERE chat_id = ? AND (tratamento IS NULL OR tratamento = '')
+     WHERE chat_id = ? AND persona = ? AND (tratamento IS NULL OR tratamento = '')
   `,
   setAtencao: `
     UPDATE leads SET atencao = ?, updated_at = datetime('now')
-     WHERE chat_id = ? AND (atencao IS NULL OR atencao = '')
+     WHERE chat_id = ? AND persona = ? AND (atencao IS NULL OR atencao = '')
   `,
   setTempoSuica: `
     UPDATE leads SET tempo_suica = ?, updated_at = datetime('now')
-     WHERE chat_id = ? AND (tempo_suica IS NULL OR tempo_suica = '')
+     WHERE chat_id = ? AND persona = ? AND (tempo_suica IS NULL OR tempo_suica = '')
   `,
   setOficioPedrito: `
     UPDATE leads SET oficio_pedrito = ?
-     WHERE chat_id = ? AND (oficio_pedrito IS NULL OR oficio_pedrito = '')
+     WHERE chat_id = ? AND persona = ? AND (oficio_pedrito IS NULL OR oficio_pedrito = '')
   `,
-  setNomePerguntado: 'UPDATE leads SET nome_perguntado = 1 WHERE chat_id = ?',
+  setNomePerguntado: 'UPDATE leads SET nome_perguntado = 1 WHERE chat_id = ? AND persona = ?',
   // Acrescenta a chave a lista sem a duplicar. Feito em SQL e nao em codigo
   // para dois turnos em paralelo nao se sobreporem um ao outro.
   marcarPergunta: `
@@ -724,46 +791,48 @@ const SQL = {
              WHEN ',' || perguntas_feitas || ',' LIKE '%,' || ? || ',%' THEN perguntas_feitas
              ELSE perguntas_feitas || ',' || ?
            END
-     WHERE chat_id = ?
+     WHERE chat_id = ? AND persona = ?
   `,
   setIdentity: `
     UPDATE leads
        SET first_name = coalesce(?, first_name),
            last_name = coalesce(?, last_name),
            username = coalesce(?, username)
-     WHERE chat_id = ?
+     WHERE chat_id = ? AND persona = ?
   `,
   leadsWithoutName: `
     SELECT chat_id FROM leads
-     WHERE (first_name IS NULL OR first_name = '')
+     WHERE persona = ?
+       AND (first_name IS NULL OR first_name = '')
        AND blocked = 0
      ORDER BY updated_at DESC
      LIMIT ?
   `,
-  setStage: "UPDATE leads SET stage = ?, updated_at = datetime('now') WHERE chat_id = ?",
+  setStage: "UPDATE leads SET stage = ?, updated_at = datetime('now') WHERE chat_id = ? AND persona = ?",
   setJob: `
     UPDATE leads SET job = ?, updated_at = datetime('now')
-     WHERE chat_id = ? AND (job IS NULL OR job = '')
+     WHERE chat_id = ? AND persona = ? AND (job IS NULL OR job = '')
   `,
   setBettingExperience: `
     UPDATE leads SET betting_experience = ?, updated_at = datetime('now')
-     WHERE chat_id = ? AND (betting_experience IS NULL OR betting_experience = '')
+     WHERE chat_id = ? AND persona = ? AND (betting_experience IS NULL OR betting_experience = '')
   `,
   setPromise: `
     UPDATE leads SET promised_at = ?, promise_note = ?, updated_at = datetime('now')
-     WHERE chat_id = ?
+     WHERE chat_id = ? AND persona = ?
   `,
-  clearPromise: 'UPDATE leads SET promised_at = NULL, promise_note = NULL WHERE chat_id = ?',
+  clearPromise: 'UPDATE leads SET promised_at = NULL, promise_note = NULL WHERE chat_id = ? AND persona = ?',
   duePromises: `
     SELECT * FROM leads
-     WHERE blocked = 0
+     WHERE persona = ?
+       AND blocked = 0
        AND promised_at IS NOT NULL
        AND promised_at <= ?
        AND stage NOT IN ('perdido', ${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
      ORDER BY promised_at ASC
      LIMIT ?
   `,
-  countPromises: 'SELECT COUNT(*) AS total FROM leads WHERE promised_at IS NOT NULL',
+  countPromises: 'SELECT COUNT(*) AS total FROM leads WHERE persona = ? AND promised_at IS NOT NULL',
   /**
    * Lead que recebeu o link e ficou calado.
    *
@@ -773,7 +842,8 @@ const SQL = {
    */
   targetsLinkParado: `
     SELECT * FROM leads
-     WHERE blocked = 0
+     WHERE persona = ?
+       AND blocked = 0
        AND remarketing_cancelled = 0
        -- Conversa levada a mao: quem manda nela sou eu, e um guiao automatico
        -- por cima do que eu escrevi e o que faz o lead perceber que ha um bot.
@@ -787,7 +857,8 @@ const SQL = {
   `,
   targetsNotConverted: `
     SELECT * FROM leads
-     WHERE blocked = 0
+     WHERE persona = ?
+       AND blocked = 0
        -- Ja respondeu a um toque: a campanha acabou para ele.
        AND remarketing_cancelled = 0
        -- Conversa levada a mao: nao entra em campanha nenhuma.
@@ -806,7 +877,8 @@ const SQL = {
   `,
   targetsVip: `
     SELECT * FROM leads
-     WHERE blocked = 0
+     WHERE persona = ?
+       AND blocked = 0
        -- Conversa levada a mao: nao entra em campanha nenhuma.
        AND human_handover = 0
        AND stage IN (${CONVERTED_STAGES.map((stage) => `'${stage}'`).join(', ')})
@@ -889,6 +961,8 @@ export async function getConversionPlaybook(params: {
  */
 export async function recordDepositProof(input: {
   chatId: number;
+  /** De quem e este lead. Sem omissao: ver upsertLead. */
+  persona: IdPersona;
   leadName: string | null;
   username: string | null;
   fileId: string;
@@ -898,6 +972,7 @@ export async function recordDepositProof(input: {
   // motores, e o SQLite suporta-a desde a 3.35.
   const criado = await conn().get<{ id: number }>(SQL.insertProof, [
     input.chatId,
+    input.persona,
     input.leadName,
     input.username,
     input.fileId,
@@ -919,21 +994,31 @@ export async function recordDepositProof(input: {
 /** Cria o lead se ele ainda nao existir e devolve o registro atualizado. */
 export async function upsertLead(input: {
   chatId: number;
+  /**
+   * De quem e este lead. Obrigatorio, e sem valor por omissao de proposito:
+   * uma persona escolhida por omissao e a forma mais facil de um lead acabar
+   * atendido pelo influencer errado. Assim o compilador obriga cada sitio a
+   * dizer de quem esta a falar.
+   */
+  persona: IdPersona;
   firstName?: string | null;
   username?: string | null;
   languageCode?: string | null;
 }): Promise<Lead> {
+  const chave = [input.chatId, input.persona];
+
   // Saber se ja existia ANTES de escrever: e o que distingue um lead novo, que
   // tem de aparecer na caixa de entrada na hora, de uma actualizacao de quem
   // ja la esta.
-  const existia = asRow<LeadRow>(await conn().get(SQL.getLead, [input.chatId])) !== undefined;
+  const existia = asRow<LeadRow>(await conn().get(SQL.getLead, chave)) !== undefined;
 
   await conn().run(SQL.upsertLead, [input.chatId,
+    input.persona,
     input.firstName ?? null,
     input.username ?? null,
     input.languageCode ?? null,]);
 
-  const row = asRow<LeadRow>(await conn().get(SQL.getLead, [input.chatId]));
+  const row = asRow<LeadRow>(await conn().get(SQL.getLead, chave));
 
   if (!row) {
     throw new Error(`Falha ao persistir o lead ${input.chatId}`);
@@ -954,17 +1039,39 @@ export async function upsertLead(input: {
   return lead;
 }
 
-export async function getLead(chatId: number): Promise<Lead | null> {
-  const row = asRow<LeadRow>(await conn().get(SQL.getLead, [chatId]));
+/**
+ * O lead de uma pessoa NUM dos influencers.
+ *
+ * A persona e obrigatoria porque a chave e composta: a mesma pessoa pode ter
+ * uma conversa com cada bot, e uma busca so pelo chat_id devolveria uma das
+ * duas a sorte — provavelmente a mais antiga. Uma resposta escrita com base no
+ * lead errado seria a mistura de personalidades a acontecer pela porta de
+ * tras, sem erro nenhum a assinalar.
+ */
+export async function getLead(chatId: number, persona: IdPersona): Promise<Lead | null> {
+  const row = asRow<LeadRow>(await conn().get(SQL.getLead, [chatId, persona]));
   return row ? mapLead(row) : null;
+}
+
+/**
+ * As conversas desta pessoa em TODOS os influencers.
+ *
+ * Serve a quem tem um chat_id e nao sabe de quem e — o caso real e uma resposta
+ * manual do painel e a resolucao do transporte. Devolve tudo em vez de escolher,
+ * porque escolher sem saber e exactamente o que nao se pode fazer aqui.
+ */
+export async function leadsDoChat(chatId: number): Promise<Lead[]> {
+  const linhas = await conn().all<LeadRow>(SQL.getLeadQualquerPersona, [chatId]);
+  return linhas.map(mapLead);
 }
 
 /**
  * Avanca o estagio do lead. Retrocessos sao ignorados — a unica excecao e
  * `perdido`, que pode ser marcado a qualquer momento (opt-out do lead).
  */
-export async function advanceStage(chatId: number, next: FunnelStage): Promise<FunnelStage> {
-  const lead = await getLead(chatId);
+export async function advanceStage(chatId: number,
+  persona: IdPersona, next: FunnelStage): Promise<FunnelStage> {
+  const lead = await getLead(chatId, persona);
   const current = lead?.stage ?? 'novo';
 
   if (next === current) return current;
@@ -975,16 +1082,19 @@ export async function advanceStage(chatId: number, next: FunnelStage): Promise<F
     if (nextIndex < currentIndex) return current;
   }
 
-  await conn().run(SQL.updateStage, [next, chatId]);
+  await conn().run(SQL.updateStage, [next, chatId, persona]);
   return next;
 }
 
-export async function setNotes(chatId: number, notes: string | null): Promise<void> {
-  await conn().run(SQL.updateNotes, [notes, chatId]);
+export async function setNotes(chatId: number,
+  persona: IdPersona, notes: string | null): Promise<void> {
+  await conn().run(SQL.updateNotes, [notes, chatId, persona]);
 }
 
 export async function addMessage(input: {
   chatId: number;
+  /** De quem e este lead. Sem omissao: ver upsertLead. */
+  persona: IdPersona;
   role: MessageRole;
   content: string;
   directive?: string | null;
@@ -996,13 +1106,14 @@ export async function addMessage(input: {
 }): Promise<void> {
   await inTransaction(async () => {
     await conn().run(SQL.insertMessage, [input.chatId,
+      input.persona,
       input.role,
       input.author ?? 'bot',
       input.content,
       input.mediaFileId ?? null,
       input.mediaKind ?? (input.mediaFileId ? 'photo' : null),
       input.directive ?? null,]);
-    await conn().run(SQL.bumpMessageCount, [input.chatId]);
+    await conn().run(SQL.bumpMessageCount, [input.chatId, input.persona]);
   });
 
   // A caixa de entrada ouve isto e mostra a mensagem no instante em que ela
@@ -1023,8 +1134,9 @@ export async function addMessage(input: {
 }
 
 /** Janela de memoria enviada as duas IAs, em ordem cronologica. */
-export async function getRecentMessages(chatId: number, limit = env.HISTORY_WINDOW): Promise<StoredMessage[]> {
-  const rows = asRows<MessageRow>(await conn().all(SQL.recentMessages, [chatId, limit]));
+export async function getRecentMessages(chatId: number,
+  persona: IdPersona, limit = env.HISTORY_WINDOW): Promise<StoredMessage[]> {
+  const rows = asRows<MessageRow>(await conn().all(SQL.recentMessages, [chatId, persona, limit]));
   return rows.map(mapMessage);
 }
 
@@ -1040,6 +1152,8 @@ export interface InboxLead extends Lead {
  * antiga. Ao contrario das listas de remarketing, nao esconde ninguem.
  */
 export async function listInboxLeads(params: {
+  /** A aba do painel: cada uma ve so as conversas do seu influencer. */
+  persona: IdPersona;
   search?: string;
   stage?: string;
   limit?: number;
@@ -1058,10 +1172,10 @@ export async function listInboxLeads(params: {
   };
 
   const rows = asRows<Row>(
-    await conn().all(SQL.inboxLeads, [search, search, stage, stage, limit, offset]),
+    await conn().all(SQL.inboxLeads, [params.persona, search, search, stage, stage, limit, offset]),
   );
   const count = asRow<{ total: number }>(
-    await conn().get(SQL.countInboxLeads, [search, search, stage, stage]),
+    await conn().get(SQL.countInboxLeads, [params.persona, search, search, stage, stage]),
   );
 
   return {
@@ -1082,12 +1196,13 @@ export async function listInboxLeads(params: {
  */
 export async function getMessagesPage(
   chatId: number,
+  persona: IdPersona,
   params: { before?: number; limit?: number } = {},
 ): Promise<StoredMessage[]> {
   const before = params.before ?? 0;
   const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 
-  return asRows<MessageRow>(await conn().all(SQL.messagesPage, [chatId, before, before, limit])).map(
+  return asRows<MessageRow>(await conn().all(SQL.messagesPage, [chatId, persona, before, before, limit])).map(
     mapMessage,
   );
 }
@@ -1098,21 +1213,24 @@ export async function getMessagesPage(
  * Ligado, o funil grava o que o lead escreve mas nao responde: a conversa
  * passa a ser do operador ate ele a devolver ao bot.
  */
-export async function setHumanHandover(chatId: number, enabled: boolean): Promise<void> {
-  await conn().run(SQL.setHandover, [enabled ? 1 : 0, chatId]);
+export async function setHumanHandover(chatId: number,
+  persona: IdPersona, enabled: boolean): Promise<void> {
+  await conn().run(SQL.setHandover, [enabled ? 1 : 0, chatId, persona]);
 }
 
 /** Apaga o historico do chat, mantendo o lead (usado pelo /reset). */
-export async function clearHistory(chatId: number): Promise<void> {
-  await conn().run(SQL.deleteMessages, [chatId]);
+export async function clearHistory(chatId: number,
+  persona: IdPersona): Promise<void> {
+  await conn().run(SQL.deleteMessages, [chatId, persona]);
 }
 
 /** Remove lead e historico — usado pelo /parar, para respeitar o opt-out. */
-export async function forgetLead(chatId: number): Promise<void> {
+export async function forgetLead(chatId: number,
+  persona: IdPersona): Promise<void> {
   await inTransaction(async () => {
-    await conn().run(SQL.deleteProofs, [chatId]);
-    await conn().run(SQL.deleteMessages, [chatId]);
-    await conn().run(SQL.deleteLead, [chatId]);
+    await conn().run(SQL.deleteProofs, [chatId, persona]);
+    await conn().run(SQL.deleteMessages, [chatId, persona]);
+    await conn().run(SQL.deleteLead, [chatId, persona]);
   });
 }
 
@@ -1197,8 +1315,9 @@ export async function claimRemarketingSlot(
   slot: string,
   runDate: string,
   audience: RemarketingAudience,
+  persona: IdPersona,
 ): Promise<boolean> {
-  const resultado = await conn().run(SQL.claimSlot, [slot, runDate, audience]);
+  const resultado = await conn().run(SQL.claimSlot, [slot, runDate, audience, persona]);
   return resultado.changes > 0;
 }
 
@@ -1207,8 +1326,9 @@ export async function recordRemarketingSent(
   runDate: string,
   audience: RemarketingAudience,
   sent: number,
+  persona: IdPersona,
 ): Promise<void> {
-  await conn().run(SQL.recordSlotSent, [sent, slot, runDate, audience]);
+  await conn().run(SQL.recordSlotSent, [sent, slot, runDate, audience, persona]);
 }
 
 /**
@@ -1218,6 +1338,8 @@ export async function recordRemarketingSent(
  * nao se manda um lembrete, responde-se.
  */
 export async function getRemarketingTargets(params: {
+  /** So os leads deste influencer: o guiao de um nao serve ao outro. */
+  persona: IdPersona;
   audience: RemarketingAudience;
   /**
    * Quantos toques o lead ja levou. Para "nao_convertido" e uma igualdade
@@ -1235,11 +1357,11 @@ export async function getRemarketingTargets(params: {
 
   const rows =
     params.audience === 'link_parado'
-      ? asRows<LeadRow>(await conn().all(SQL.targetsLinkParado, [cold, params.limit]))
+      ? asRows<LeadRow>(await conn().all(SQL.targetsLinkParado, [params.persona, cold, params.limit]))
       : params.audience === 'vip'
-      ? asRows<LeadRow>(await conn().all(SQL.targetsVip, [sinceLast, params.limit]))
+      ? asRows<LeadRow>(await conn().all(SQL.targetsVip, [params.persona, sinceLast, params.limit]))
       : asRows<LeadRow>(
-          await conn().all(SQL.targetsNotConverted, [params.touch ?? 0, cold, sinceLast, params.limit]),
+          await conn().all(SQL.targetsNotConverted, [params.persona, params.touch ?? 0, cold, sinceLast, params.limit]),
         );
 
   return rows.map(mapLead);
@@ -1252,37 +1374,46 @@ export async function getRemarketingTargets(params: {
  * a serio, e continuar a mandar-lhe guioes automaticos por cima disso e o que
  * faz a pessoa bloquear o bot.
  */
-export async function cancelRemarketing(chatId: number): Promise<void> {
-  await conn().run(SQL.cancelRemarketing, [chatId]);
+export async function cancelRemarketing(chatId: number,
+  persona: IdPersona): Promise<void> {
+  await conn().run(SQL.cancelRemarketing, [chatId, persona]);
 }
 
-export async function markRemarketed(chatId: number): Promise<void> {
-  await conn().run(SQL.markRemarketed, [chatId]);
+export async function markRemarketed(chatId: number,
+  persona: IdPersona): Promise<void> {
+  await conn().run(SQL.markRemarketed, [chatId, persona]);
 }
 
 /** O lead bloqueou o bot: nunca mais lhe mandamos nada. */
-export async function markBlocked(chatId: number): Promise<void> {
-  await conn().run(SQL.markBlocked, [chatId]);
+export async function markBlocked(chatId: number,
+  persona: IdPersona): Promise<void> {
+  await conn().run(SQL.markBlocked, [chatId, persona]);
 }
 
 /**
  * Regista que o lead se comprometeu a tratar disto a uma certa hora. Uma
  * promessa nova substitui a anterior: vale a ultima coisa que ele disse.
  */
-export async function setDepositPromise(chatId: number, whenUtc: string, note: string | null): Promise<void> {
-  await conn().run(SQL.setPromise, [whenUtc, note, chatId]);
+export async function setDepositPromise(chatId: number,
+  persona: IdPersona, whenUtc: string, note: string | null): Promise<void> {
+  await conn().run(SQL.setPromise, [whenUtc, note, chatId, persona]);
 }
 
-export async function clearDepositPromise(chatId: number): Promise<void> {
-  await conn().run(SQL.clearPromise, [chatId]);
+export async function clearDepositPromise(chatId: number,
+  persona: IdPersona): Promise<void> {
+  await conn().run(SQL.clearPromise, [chatId, persona]);
 }
 
 /**
  * Promessas vencidas. Quem ja depositou ou saiu do funil nao aparece — o
  * lembrete e para quem disse que ia tratar disto e ainda nao tratou.
  */
-export async function getDuePromises(nowUtc: string, limit: number): Promise<Lead[]> {
-  return asRows<LeadRow>(await conn().all(SQL.duePromises, [nowUtc, limit])).map(mapLead);
+export async function getDuePromises(
+  persona: IdPersona,
+  nowUtc: string,
+  limit: number,
+): Promise<Lead[]> {
+  return asRows<LeadRow>(await conn().all(SQL.duePromises, [persona, nowUtc, limit])).map(mapLead);
 }
 
 /**
@@ -1296,8 +1427,16 @@ export async function getDuePromises(nowUtc: string, limit: number): Promise<Lea
  * O INSERT e a propria verificacao: fazer SELECT e depois INSERT deixaria uma
  * fresta entre os dois por onde passa o reenvio que chega ao mesmo tempo.
  */
-export async function claimUpdate(updateId: number): Promise<boolean> {
-  const result = await conn().run(SQL.claimUpdate, [updateId]);
+/**
+ * Reserva este update, para nao ser entregue duas vezes.
+ *
+ * O `bot` faz parte da chave porque cada bot tem a SUA sequencia de update_id,
+ * e as duas colidem. Sem ele, o update 5000 de um era descartado por o 5000 do
+ * outro ja estar na tabela — e o lead ficava sem resposta, sem uma linha de log
+ * a dizer porque.
+ */
+export async function claimUpdate(updateId: number, bot: IdPersona): Promise<boolean> {
+  const result = await conn().run(SQL.claimUpdate, [updateId, bot]);
   return result.changes > 0;
 }
 
@@ -1306,8 +1445,9 @@ export async function pruneProcessedUpdates(keep = 5000): Promise<void> {
   await conn().run(SQL.pruneUpdates, [keep]);
 }
 
-export async function setCanton(chatId: number, canton: string): Promise<void> {
-  await conn().run(SQL.setCanton, [canton, chatId]);
+export async function setCanton(chatId: number,
+  persona: IdPersona, canton: string): Promise<void> {
+  await conn().run(SQL.setCanton, [canton, chatId, persona]);
 }
 
 /**
@@ -1328,21 +1468,26 @@ export async function restoreLeads(
   let existentes = 0;
 
   for (const lead of leads) {
-    const existing = await getLead(lead.chatId);
+    const existing = await getLead(lead.chatId, PERSONA_HISTORICA);
 
     if (existing) {
       existentes += 1;
     } else {
       criados += 1;
-      await upsertLead({ chatId: lead.chatId, firstName: lead.firstName ?? null });
+      await upsertLead({
+        chatId: lead.chatId,
+        persona: PERSONA_HISTORICA,
+        firstName: lead.firstName ?? null,
+      });
     }
 
     // advanceStage e nao setStage: nunca puxa um lead para tras.
-    await advanceStage(lead.chatId, lead.stage);
+    await advanceStage(lead.chatId, PERSONA_HISTORICA, lead.stage);
 
-    if ((await getRecentMessages(lead.chatId, 1)).length === 0) {
+    if ((await getRecentMessages(lead.chatId, PERSONA_HISTORICA, 1)).length === 0) {
       await addMessage({
         chatId: lead.chatId,
+        persona: PERSONA_HISTORICA,
         role: 'user',
         content:
           '[conversa recuperada: este lead ja falou contigo antes, mas o texto das mensagens ' +
@@ -1379,17 +1524,22 @@ export async function restoreVipLeads(
   let restored = 0;
 
   for (const lead of leads) {
-    const existing = await getLead(lead.chatId);
+    const existing = await getLead(lead.chatId, PERSONA_HISTORICA);
 
-    await upsertLead({ chatId: lead.chatId, firstName: lead.firstName });
-    await setStage(lead.chatId, 'acesso_liberado');
-    await setPinned(lead.chatId, true);
+    await upsertLead({
+      chatId: lead.chatId,
+      persona: PERSONA_HISTORICA,
+      firstName: lead.firstName,
+    });
+    await setStage(lead.chatId, PERSONA_HISTORICA, 'acesso_liberado');
+    await setPinned(lead.chatId, PERSONA_HISTORICA, true);
 
     // Conversa vazia: o lead foi criado agora, ou perdeu o historico no
     // deploy. A marca evita que o funil recomece do zero com quem ja pagou.
-    if ((await getRecentMessages(lead.chatId, 1)).length === 0) {
+    if ((await getRecentMessages(lead.chatId, PERSONA_HISTORICA, 1)).length === 0) {
       await addMessage({
         chatId: lead.chatId,
+        persona: PERSONA_HISTORICA,
         role: 'user',
         content:
           '[lead ja validado: depositou, foi aprovado a mao e ja esta dentro do grupo VIP. ' +
@@ -1410,8 +1560,9 @@ export async function restoreVipLeads(
  *
  * E so ordenacao: nao mexe no estagio, no remarketing nem no que o bot diz.
  */
-export async function setPinned(chatId: number, pinned: boolean): Promise<void> {
-  await conn().run(SQL.setPinned, [pinned ? 1 : 0, chatId]);
+export async function setPinned(chatId: number,
+  persona: IdPersona, pinned: boolean): Promise<void> {
+  await conn().run(SQL.setPinned, [pinned ? 1 : 0, chatId, persona]);
 }
 
 /**
@@ -1423,9 +1574,10 @@ export async function setPinned(chatId: number, pinned: boolean): Promise<void> 
  */
 export async function setTransporte(
   chatId: number,
-  transporte: 'bot' | 'userbot',
+  persona: IdPersona,
+  transporte: 'bot' | 'userbot' | 'bot_ivan',
 ): Promise<void> {
-  await conn().run(SQL.setTransporte, [transporte, chatId]);
+  await conn().run(SQL.setTransporte, [transporte, chatId, persona]);
 }
 
 /**
@@ -1436,8 +1588,9 @@ export async function setTransporte(
  * dizer que o lead ja tem o acesso, o estagio tem de obedecer — o pagamento
  * foi validado por mim, fora do que o bot ve.
  */
-export async function setStage(chatId: number, stage: FunnelStage): Promise<void> {
-  await conn().run(SQL.setStage, [stage, chatId]);
+export async function setStage(chatId: number,
+  persona: IdPersona, stage: FunnelStage): Promise<void> {
+  await conn().run(SQL.setStage, [stage, chatId, persona]);
 }
 
 /**
@@ -1449,35 +1602,40 @@ export async function setStage(chatId: number, stage: FunnelStage): Promise<void
  */
 export async function setIdentity(
   chatId: number,
+  persona: IdPersona,
   identity: { firstName: string | null; lastName: string | null; username: string | null },
 ): Promise<void> {
   await conn().run(SQL.setIdentity, [identity.firstName,
     identity.lastName,
     identity.username,
-    chatId,]);
+    chatId,
+    persona,]);
 }
 
 /** Leads sem nome nenhum: sao estes que aparecem como "#id" na caixa. */
-export async function leadsSemNome(limit = 200): Promise<number[]> {
+export async function leadsSemNome(persona: IdPersona, limit = 200): Promise<number[]> {
   const rows = asRows<{ chat_id: number }>(
-    await conn().all(SQL.leadsWithoutName, [Math.max(1, Math.min(limit, 1000))]),
+    await conn().all(SQL.leadsWithoutName, [persona, Math.max(1, Math.min(limit, 1000))]),
   );
   return rows.map((row) => row.chat_id);
 }
 
 /** A primeira resposta e a boa: escritas seguintes sao ignoradas no SQL. */
-export async function setJob(chatId: number, job: string): Promise<void> {
-  await conn().run(SQL.setJob, [job, chatId]);
+export async function setJob(chatId: number,
+  persona: IdPersona, job: string): Promise<void> {
+  await conn().run(SQL.setJob, [job, chatId, persona]);
 }
 
 /** A primeira resposta e a boa: escritas seguintes sao ignoradas no SQL. */
-export async function setBettingExperience(chatId: number, experience: string): Promise<void> {
-  await conn().run(SQL.setBettingExperience, [experience, chatId]);
+export async function setBettingExperience(chatId: number,
+  persona: IdPersona, experience: string): Promise<void> {
+  await conn().run(SQL.setBettingExperience, [experience, chatId, persona]);
 }
 
 /** Como se trata o lead. A primeira vez que se souber e a que fica. */
-export async function setTratamento(chatId: number, nome: string): Promise<void> {
-  await conn().run(SQL.setTratamento, [nome.slice(0, 40), chatId]);
+export async function setTratamento(chatId: number,
+  persona: IdPersona, nome: string): Promise<void> {
+  await conn().run(SQL.setTratamento, [nome.slice(0, 40), chatId, persona]);
 }
 
 /**
@@ -1487,23 +1645,27 @@ export async function setTratamento(chatId: number, nome: string): Promise<void>
  * RESPOSTA; este guarda que a pergunta chegou a ser feita — e sao coisas
  * diferentes quando o lead responde "nao trabalho".
  */
-export async function marcarPerguntaFeita(chatId: number, chave: string): Promise<void> {
-  await conn().run(SQL.marcarPergunta, [chave, chave, chave, chatId]);
+export async function marcarPerguntaFeita(chatId: number,
+  persona: IdPersona, chave: string): Promise<void> {
+  await conn().run(SQL.marcarPergunta, [chave, chave, chave, chatId, persona]);
 }
 
 /** Marca que o nome ja foi perguntado, mesmo que ele nao responda. */
-export async function setNomePerguntado(chatId: number): Promise<void> {
-  await conn().run(SQL.setNomePerguntado, [chatId]);
+export async function setNomePerguntado(chatId: number,
+  persona: IdPersona): Promise<void> {
+  await conn().run(SQL.setNomePerguntado, [chatId, persona]);
 }
 
 /** O que o trouxe aqui. */
-export async function setAtencao(chatId: number, atencao: string): Promise<void> {
-  await conn().run(SQL.setAtencao, [atencao.slice(0, 200), chatId]);
+export async function setAtencao(chatId: number,
+  persona: IdPersona, atencao: string): Promise<void> {
+  await conn().run(SQL.setAtencao, [atencao.slice(0, 200), chatId, persona]);
 }
 
 /** Ha quanto tempo vive na Suica. */
-export async function setTempoSuica(chatId: number, tempo: string): Promise<void> {
-  await conn().run(SQL.setTempoSuica, [tempo.slice(0, 60), chatId]);
+export async function setTempoSuica(chatId: number,
+  persona: IdPersona, tempo: string): Promise<void> {
+  await conn().run(SQL.setTempoSuica, [tempo.slice(0, 60), chatId, persona]);
 }
 
 /**
@@ -1513,8 +1675,9 @@ export async function setTempoSuica(chatId: number, tempo: string): Promise<void
  * "restauracao" tres turnos depois, ao mesmo lead. Uma pessoa nao muda de
  * passado a meio da conversa.
  */
-export async function setOficioPedrito(chatId: number, oficio: string): Promise<void> {
-  await conn().run(SQL.setOficioPedrito, [oficio, chatId]);
+export async function setOficioPedrito(chatId: number,
+  persona: IdPersona, oficio: string): Promise<void> {
+  await conn().run(SQL.setOficioPedrito, [oficio, chatId, persona]);
 }
 
 /**
@@ -1523,16 +1686,17 @@ export async function setOficioPedrito(chatId: number, oficio: string): Promise<
  * Posta pelos comandos /aprovado e /naoaprovado, e e ela que decide qual das
  * campanhas de remarketing lhe toca.
  */
-export async function setTag(chatId: number, tag: string | null): Promise<void> {
-  await conn().run(SQL.setTag, [tag, chatId]);
+export async function setTag(chatId: number,
+  persona: IdPersona, tag: string | null): Promise<void> {
+  await conn().run(SQL.setTag, [tag, chatId, persona]);
 }
 
-export async function getStats(): Promise<FunnelStats> {
-  const leads = asRow<{ total: number }>(await conn().get(SQL.countLeads, []));
-  const messages = asRow<{ total: number }>(await conn().get(SQL.countMessages, []));
-  const stages = asRows<{ stage: string; total: number }>(await conn().all(SQL.countByStage, []));
-  const proofs = asRow<{ total: number }>(await conn().get(SQL.countPendingProofs, []));
-  const promises = asRow<{ total: number }>(await conn().get(SQL.countPromises, []));
+export async function getStats(persona: IdPersona): Promise<FunnelStats> {
+  const leads = asRow<{ total: number }>(await conn().get(SQL.countLeads, [persona]));
+  const messages = asRow<{ total: number }>(await conn().get(SQL.countMessages, [persona]));
+  const stages = asRows<{ stage: string; total: number }>(await conn().all(SQL.countByStage, [persona]));
+  const proofs = asRow<{ total: number }>(await conn().get(SQL.countPendingProofs, [persona]));
+  const promises = asRow<{ total: number }>(await conn().get(SQL.countPromises, [persona]));
 
   const byStage: Record<string, number> = {};
   for (const row of stages) {

@@ -18,6 +18,8 @@ import {
   personalise,
 } from '../services/remarketing';
 import { createLogger } from '../utils/logger';
+import { IDS_PERSONA, type IdPersona } from '../personas/ids';
+import { canalDe, canalParaChat } from '../telegram/canal';
 import { nowInTimezone } from '../utils/timezone';
 import { bot } from '../telegram/bot';
 
@@ -68,6 +70,7 @@ function dueSlot(time: string, slots: string[]): string | null {
 }
 
 async function sendToAudience(
+  persona: IdPersona,
   audience: RemarketingAudience,
   slot: string,
   date: string,
@@ -75,7 +78,7 @@ async function sendToAudience(
   // A reserva e por (slot, dia, publico) e vive na base de dados: o Render
   // reinicia o servico a toda a hora, e sem isto cada reinicio dentro da
   // janela reenviaria a campanha inteira.
-  if (!await claimRemarketingSlot(slot, date, audience)) return;
+  if (!await claimRemarketingSlot(slot, date, audience, persona)) return;
 
   // O VIP e o link_parado sao listas so; quem nao converteu corre toque a
   // toque, porque cada toque tem o seu texto e a sua janela de tempo.
@@ -90,6 +93,7 @@ async function sendToAudience(
 
   for (const touch of touches) {
     const targets = await getRemarketingTargets({
+      persona,
       audience,
       touch,
       // Primeiro toque: conta desde a ultima coisa que o lead disse. Segundo:
@@ -124,7 +128,7 @@ async function sendToAudience(
     );
 
     for (const lead of targets) {
-      const delivered = await sendOne(lead, template);
+      const delivered = await sendOne(persona, lead, template);
       if (delivered) sent += 1;
 
       // A pausa fica DENTRO da fila e nao entre toques: e o ritmo de entrega
@@ -134,41 +138,57 @@ async function sendToAudience(
   }
 
   if (considered === 0) {
-    log.info(`slot ${slot} (${audience}): nenhum lead elegivel`);
+    log.info(`slot ${slot} ${persona} (${audience}): nenhum lead elegivel`);
     return;
   }
 
-  await recordRemarketingSent(slot, date, audience, sent);
-  log.info(`slot ${slot} (${audience}): ${sent}/${considered} entregues`);
+  await recordRemarketingSent(slot, date, audience, sent, persona);
+  log.info(`slot ${slot} ${persona} (${audience}): ${sent}/${considered} entregues`);
 }
 
-async function sendOne(lead: Lead, template: string): Promise<boolean> {
+async function sendOne(persona: IdPersona, lead: Lead, template: string): Promise<boolean> {
   const text = personalise(template, lead.firstName);
 
   try {
-    await bot.api.sendMessage(lead.chatId, text, {
-      link_preview_options: { is_disabled: true },
-    });
+    // Pelo canal do lead e nao pela Bot API.
+    //
+    // Isto era um bug com dinheiro la dentro: os leads do El Pedrito chegam
+    // pela CONTA de utilizador, e um bot nao consegue escrever a quem nunca lhe
+    // fez /start. O envio falhava com "chat not found", o bloco abaixo lia isso
+    // como um bloqueio, e o lead saia de TODAS as campanhas para sempre. Leads
+    // bons, pagos a anuncio, riscados por uma mensagem que nunca foi entregue.
+    const canal = await canalParaChat(lead.chatId, persona);
+    await canal.enviar(lead.chatId, text);
 
     // Gravado no historico depois de entregue. Sem isto o lead via no telemovel
     // mensagens que nao existiam em lado nenhum: a caixa de entrada mostrava
     // uma conversa diferente da real, e as IAs tambem nao sabiam o que ja lhe
     // tinha sido dito.
-    await addMessage({ chatId: lead.chatId, role: 'assistant', content: text, author: 'sistema' });
-    await markRemarketed(lead.chatId);
+    await addMessage({
+      chatId: lead.chatId,
+      persona,
+      role: 'assistant',
+      content: text,
+      author: 'sistema',
+    });
+    await markRemarketed(lead.chatId, persona);
     return true;
   } catch (error) {
-    const description = (error as { description?: string })?.description ?? '';
+    const description =
+      (error as { description?: string })?.description ?? (error as Error)?.message ?? '';
 
-    // 403 significa que o lead bloqueou o bot ou apagou a conversa. Insistir
-    // com quem bloqueou nao entrega nada e conta para os limites do Telegram.
-    if (/bot was blocked|user is deactivated|chat not found/i.test(description)) {
-      await markBlocked(lead.chatId);
-      log.info(`lead ${lead.chatId} bloqueou o bot; retirado da lista`);
+    // So estes dois dizem MESMO que o lead nos pos fora. O "chat not found" saiu
+    // daqui de proposito: quer dizer que nao ha conversa por aquele caminho, o
+    // que e um problema de transporte nosso e nao uma decisao do lead.
+    if (/bot was blocked|user is deactivated/i.test(description)) {
+      await markBlocked(lead.chatId, persona);
+      log.info(`lead ${lead.chatId} (${persona}) bloqueou o bot; retirado da lista`);
       return false;
     }
 
-    log.warn(`falha ao enviar remarketing a ${lead.chatId}`, description || error);
+    // A descricao vai para o log: era o que faltava para distinguir um bloqueio
+    // de um erro nosso sem ter de adivinhar.
+    log.warn(`falha ao enviar remarketing a ${lead.chatId} (${persona})`, description || error);
     return false;
   }
 }
@@ -182,8 +202,8 @@ async function sendOne(lead: Lead, template: string): Promise<boolean> {
  * silencio — o lead pediu-o ("apitas-me aqui"), e o silencio existe para nao
  * incomodar quem nao pediu nada.
  */
-async function sendDuePromises(): Promise<void> {
-  const due = await getDuePromises(new Date().toISOString(), 100);
+async function sendDuePromises(persona: IdPersona): Promise<void> {
+  const due = await getDuePromises(persona, new Date().toISOString(), 100);
   if (due.length === 0) return;
 
   const { template, generated } = await generateRemarketingMessage('promessa');
@@ -192,9 +212,9 @@ async function sendDuePromises(): Promise<void> {
   for (const lead of due) {
     // Limpa antes de enviar: se o envio falhar, o lead nao fica a receber o
     // mesmo lembrete a cada minuto ate ao fim dos tempos.
-    await clearDepositPromise(lead.chatId);
+    await clearDepositPromise(lead.chatId, persona);
 
-    const delivered = await sendOne(lead, template);
+    const delivered = await sendOne(persona, lead, template);
     log.info(
       `lembrete de promessa chat=${lead.chatId} (${lead.promiseNote ?? '?'}) ` +
         `${delivered ? 'entregue' : 'falhou'}`,
@@ -205,26 +225,48 @@ async function sendDuePromises(): Promise<void> {
 }
 
 async function tick(): Promise<void> {
-  try {
-    await sendDuePromises();
-  } catch (error) {
-    log.error('falha ao enviar lembretes de promessa', error);
-  }
-
   const slots = parseSlots();
-  if (slots.length === 0) return;
-
   const { time, date } = nowInTimezone(env.REMARKETING_TIMEZONE);
-  const slot = dueSlot(time, slots);
-  if (!slot) return;
+  const slot = slots.length > 0 ? dueSlot(time, slots) : null;
 
-  for (const audience of AUDIENCES) {
+  // Cada influencer corre a sua campanha, com as suas listas e o seu guiao. Um
+  // `for` e nao um Promise.all: sao envios para o Telegram, e disparar duas
+  // campanhas ao mesmo tempo era pedir para levar 429.
+  for (const persona of personasComCanal()) {
     try {
-      await sendToAudience(audience, slot, date);
+      await sendDuePromises(persona);
     } catch (error) {
-      log.error(`falha no slot ${slot} (${audience})`, error);
+      log.error(`falha ao enviar lembretes de promessa (${persona})`, error);
+    }
+
+    if (!slot) continue;
+
+    for (const audience of AUDIENCES) {
+      try {
+        await sendToAudience(persona, audience, slot, date);
+      } catch (error) {
+        log.error(`falha no slot ${slot} ${persona} (${audience})`, error);
+      }
     }
   }
+}
+
+/**
+ * Os influencers que tem por onde enviar agora.
+ *
+ * Correr a campanha de um influencer sem canal ligado nao dava erro nenhum —
+ * gastava a reserva do slot do dia e o lead nunca recebia nada. Melhor nao
+ * comecar.
+ */
+function personasComCanal(): IdPersona[] {
+  return IDS_PERSONA.filter((persona) => {
+    try {
+      canalDe(persona === 'ivan' ? 'bot_ivan' : 'bot');
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 let timer: NodeJS.Timeout | null = null;

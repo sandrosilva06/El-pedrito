@@ -21,6 +21,9 @@ import 'dotenv/config';
 process.env.DATABASE_PATH = process.env.CHAT_DB ?? './data/chat-harness.sqlite';
 
 const CHAT_ID = Number(process.env.CHAT_ID ?? -1);
+
+/** Este script conversa com o El Pedrito. */
+const PERSONA = 'el_pedrito' as const;
 const NAME = process.env.LEAD_NAME ?? 'Sandro';
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -34,8 +37,8 @@ async function main(): Promise<void> {
   const { env } = await import('../config/env');
 
   async function turn(incoming: string): Promise<void> {
-    const history = await db.getRecentMessages(CHAT_ID);
-    const lead = await db.upsertLead({ chatId: CHAT_ID, firstName: NAME });
+    const history = await db.getRecentMessages(CHAT_ID, PERSONA);
+    const lead = await db.upsertLead({ chatId: CHAT_ID, persona: PERSONA, firstName: NAME });
 
     const t0 = Date.now();
     const directive = await planStrategy({ lead, history, incoming });
@@ -43,27 +46,28 @@ async function main(): Promise<void> {
     const answer = await writeReply({ lead, history, incoming, directive });
     const t2 = Date.now();
 
-    await db.addMessage({ chatId: CHAT_ID, role: 'user', content: incoming });
+    await db.addMessage({ chatId: CHAT_ID, persona: PERSONA, role: 'user', content: incoming });
     db.addMessage({
       chatId: CHAT_ID,
+      persona: PERSONA,
       role: 'assistant',
       content: answer,
       directive: JSON.stringify(directive),
     });
-    db.advanceStage(CHAT_ID, directive.shouldStop ? 'perdido' : directive.stage);
+    db.advanceStage(CHAT_ID, PERSONA, directive.shouldStop ? 'perdido' : directive.stage);
 
     // Espelha o que o bot faz em runFunnelTurn. Sem isto o harness nunca
     // gravava o cantao e dava a impressao de que a persistencia estava
     // partida quando o que faltava era o teste passar por aqui.
     if (!lead.canton) {
       const detected = detectCanton(incoming) ?? detectCanton(directive.canton);
-      if (detected) await db.setCanton(CHAT_ID, detected);
+      if (detected) await db.setCanton(CHAT_ID, PERSONA, detected);
     }
 
     console.log(dim(`\n  ┌─ DIRETRIZ (estrategista, ${t1 - t0}ms)`));
     console.log(dim(`  │ estagio    ${directive.stage}   temp ${directive.temperature}/100`));
     console.log(dim(`  │ perfil     ${directive.profile}`));
-    console.log(dim(`  │ cantao     ${(await db.getLead(CHAT_ID))?.canton ?? '(desconhecido)'}`));
+    console.log(dim(`  │ cantao     ${(await db.getLead(CHAT_ID, PERSONA))?.canton ?? '(desconhecido)'}`));
     console.log(dim(`  │ intencao   ${directive.intent}`));
     console.log(dim(`  │ objecao    ${directive.objection}`));
     console.log(dim(`  │ instrucao  ${directive.directive}`));

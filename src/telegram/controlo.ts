@@ -37,6 +37,7 @@ import {
   type MessageAuthor,
 } from '../db/database';
 import { createLogger } from '../utils/logger';
+import { type IdPersona } from '../personas/ids';
 
 const log = createLogger('controlo');
 
@@ -119,11 +120,16 @@ export function ehComandoDeControlo(texto: string): boolean {
  */
 export async function aoComandoTag(params: {
   chatId: number;
+  /**
+   * Em que influencer se esta a mexer. O controlo silencioso e o mesmo para os
+   * dois, mas o lead nao: pausar o do El Pedrito nao pode pausar o do Ivan.
+   */
+  persona: IdPersona;
   messageId: number;
   tag: string;
   apagar: (chatId: number, messageId: number) => Promise<void>;
 }): Promise<{ apagado: boolean; tag: string }> {
-  const { chatId, messageId, tag, apagar } = params;
+  const { chatId, persona, messageId, tag, apagar } = params;
 
   let apagado = false;
 
@@ -136,12 +142,12 @@ export async function aoComandoTag(params: {
 
   const { setTag, advanceStage } = await import('../db/database');
 
-  await upsertLead({ chatId });
-  await setTag(chatId, tag);
+  await upsertLead({ chatId, persona });
+  await setTag(chatId, persona, tag);
 
   if (tag === 'qualificado') {
     // Ja depositou: sai das campanhas de venda e entra nas de acompanhamento.
-    await advanceStage(chatId, 'acesso_liberado');
+    await advanceStage(chatId, persona, 'acesso_liberado');
   }
 
   log.info(`chat ${chatId}: marcado como ${tag}`);
@@ -151,6 +157,8 @@ export async function aoComandoTag(params: {
 
 export interface MensagemDoOperador {
   chatId: number;
+  /** Em qual dos influencers e que eu escrevi a mao. */
+  persona: IdPersona;
   texto: string;
   /** "photo", "voice", "video"... quando a mensagem leva ficheiro. */
   mediaKind?: string | null;
@@ -171,15 +179,15 @@ export interface MensagemDoOperador {
 export async function aoOperadorEscrever(
   mensagem: MensagemDoOperador,
 ): Promise<{ pausou: boolean }> {
-  const { chatId, texto, mediaKind = null, mediaFileId = null } = mensagem;
+  const { chatId, persona, texto, mediaKind = null, mediaFileId = null } = mensagem;
 
   // upsert e nao get: eu posso escrever primeiro a alguem que o funil ainda
   // nao conhece, e nesse caso o lead nasce aqui.
-  const lead = await upsertLead({ chatId });
+  const lead = await upsertLead({ chatId, persona });
   const estavaActiva = !lead.humanHandover;
 
   if (estavaActiva) {
-    await setHumanHandover(chatId, true);
+    await setHumanHandover(chatId, persona, true);
     log.info(`chat ${chatId}: respondi a mao, o bot fica em silencio`);
   }
 
@@ -192,6 +200,7 @@ export async function aoOperadorEscrever(
 
   await addMessage({
     chatId,
+    persona,
     role: 'assistant',
     content: paraGravar,
     author: 'humano' satisfies MessageAuthor,
@@ -226,11 +235,16 @@ function descreverMedia(kind: string | null): string {
  */
 export async function aoComandoRetomar(params: {
   chatId: number;
+  /**
+   * Em que influencer se esta a mexer. O controlo silencioso e o mesmo para os
+   * dois, mas o lead nao: pausar o do El Pedrito nao pode pausar o do Ivan.
+   */
+  persona: IdPersona;
   messageId: number;
   apagar: (chatId: number, messageId: number) => Promise<void>;
   retomar: (chatId: number) => Promise<boolean>;
 }): Promise<{ apagado: boolean; respondeu: boolean }> {
-  const { chatId, messageId, apagar, retomar } = params;
+  const { chatId, persona, messageId, apagar, retomar } = params;
 
   let apagado = false;
 
@@ -244,7 +258,7 @@ export async function aoComandoRetomar(params: {
     log.warn(`chat ${chatId}: nao consegui apagar o comando; sigo na mesma`, error);
   }
 
-  await setHumanHandover(chatId, false);
+  await setHumanHandover(chatId, persona, false);
   log.info(`chat ${chatId}: devolvido a IA pelo Telegram`);
 
   const respondeu = await retomar(chatId);
@@ -259,10 +273,15 @@ export async function aoComandoRetomar(params: {
  */
 export async function aoComandoParar(params: {
   chatId: number;
+  /**
+   * Em que influencer se esta a mexer. O controlo silencioso e o mesmo para os
+   * dois, mas o lead nao: pausar o do El Pedrito nao pode pausar o do Ivan.
+   */
+  persona: IdPersona;
   messageId: number;
   apagar: (chatId: number, messageId: number) => Promise<void>;
 }): Promise<{ apagado: boolean }> {
-  const { chatId, messageId, apagar } = params;
+  const { chatId, persona, messageId, apagar } = params;
 
   let apagado = false;
 
@@ -273,8 +292,8 @@ export async function aoComandoParar(params: {
     log.warn(`chat ${chatId}: nao consegui apagar o comando; sigo na mesma`, error);
   }
 
-  await upsertLead({ chatId });
-  await setHumanHandover(chatId, true);
+  await upsertLead({ chatId, persona });
+  await setHumanHandover(chatId, persona, true);
   log.info(`chat ${chatId}: assumido a mao pelo Telegram, sem mensagem para o lead`);
 
   return { apagado };
@@ -287,13 +306,13 @@ export async function aoComandoParar(params: {
  * gravar, so o silencio. A imagem em si e gravada por quem a recebeu, que
  * sabe o file_id.
  */
-export async function pausarPorMedia(chatId: number): Promise<void> {
-  await setHumanHandover(chatId, true);
+export async function pausarPorMedia(chatId: number, persona: IdPersona): Promise<void> {
+  await setHumanHandover(chatId, persona, true);
   log.info(`chat ${chatId}: o lead mandou um ficheiro, atendimento pausado para validacao`);
 }
 
 /** O bot esta a responder a este lead? (o "is_bot_active" do pedido) */
-export async function botActivo(chatId: number): Promise<boolean> {
-  const lead = await getLead(chatId);
+export async function botActivo(chatId: number, persona: IdPersona): Promise<boolean> {
+  const lead = await getLead(chatId, persona);
   return lead ? !lead.humanHandover : true;
 }

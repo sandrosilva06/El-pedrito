@@ -4,7 +4,9 @@ import express, { type NextFunction, type Request, type Response, type Router } 
 import { GrammyError, InputFile } from 'grammy';
 
 import { env } from '../config/env';
+import { ehIdPersona, type IdPersona } from '../personas/ids';
 import {
+  type Lead,
   addMessage,
   getLead,
   getMessagesPage,
@@ -175,6 +177,51 @@ async function proxyToIvan(req: Request, res: Response): Promise<void> {
     log.error('falha ao falar com o servico do Ivan', error);
     res.status(502).json({ error: 'o outro bot nao respondeu' });
   }
+}
+
+
+/**
+ * A aba do painel, lida do pedido.
+ *
+ * Validada e nao convertida: `?persona=` vem do browser, e um valor que nao
+ * seja um influencer conhecido tem de ser recusado em vez de adivinhado. Sem o
+ * parametro fica o El Pedrito, que e a aba que ja existia antes de haver duas.
+ */
+function personaDoPedido(req: { query: Record<string, unknown> }): IdPersona | null {
+  const pedida = req.query.persona;
+  if (pedida === undefined || pedida === '') return 'el_pedrito';
+  return ehIdPersona(pedida) ? pedida : null;
+}
+
+
+/**
+ * O lead que o pedido nomeia, ou nada — com a resposta de erro ja enviada.
+ *
+ * Existe porque um chat_id sozinho deixou de identificar uma conversa: a mesma
+ * pessoa pode ter uma com cada influencer. Todas as rotas de um lead passam por
+ * aqui, e assim nenhuma pode mexer na conversa errada por ter recebido so o
+ * numero.
+ */
+async function leadDoPedido(
+  req: { query: Record<string, unknown> },
+  res: { status: (c: number) => { json: (b: unknown) => void } },
+  chatId: number,
+): Promise<Lead | null> {
+  const persona = personaDoPedido(req);
+
+  if (!persona) {
+    res.status(400).json({ error: 'persona desconhecida' });
+    return null;
+  }
+
+  const lead = await getLead(chatId, persona);
+
+  if (!lead) {
+    res.status(404).json({ error: 'lead nao encontrado' });
+    return null;
+  }
+
+  return lead;
 }
 
 export function createInboxRouter(): Router {
@@ -378,10 +425,17 @@ export function createInboxRouter(): Router {
   });
 
   router.get('/leads', async (req, res) => {
+    const persona = personaDoPedido(req);
+    if (!persona) {
+      res.status(400).json({ error: 'persona desconhecida' });
+      return;
+    }
+
     const { search, stage, limit, offset } = req.query as Record<string, string | undefined>;
 
     res.json(
       await listInboxLeads({
+        persona,
         search,
         stage,
         limit: limit ? Number(limit) : undefined,
@@ -397,11 +451,9 @@ export function createInboxRouter(): Router {
       return;
     }
 
-    const lead = await getLead(chatId);
-    if (!lead) {
-      res.status(404).json({ error: 'lead nao encontrado' });
-      return;
-    }
+    const lead = await leadDoPedido(req, res, chatId);
+    if (!lead) return;
+
 
     res.json({ lead });
   });
@@ -413,10 +465,13 @@ export function createInboxRouter(): Router {
       return;
     }
 
+    const lead = await leadDoPedido(req, res, chatId);
+    if (!lead) return;
+
     const { before, limit } = req.query as Record<string, string | undefined>;
 
     res.json({
-      messages: await getMessagesPage(chatId, {
+      messages: await getMessagesPage(chatId, lead.persona, {
         before: before ? Number(before) : undefined,
         limit: limit ? Number(limit) : undefined,
       }),
@@ -438,6 +493,9 @@ export function createInboxRouter(): Router {
       return;
     }
 
+    const lead = await leadDoPedido(req, res, chatId);
+    if (!lead) return;
+
     const text = String((req.body as { text?: unknown })?.text ?? '').trim();
 
     if (text.length === 0) {
@@ -455,11 +513,11 @@ export function createInboxRouter(): Router {
         link_preview_options: { is_disabled: true },
       });
 
-      await addMessage({ chatId, role: 'assistant', content: text, author: 'humano' });
+      await addMessage({ chatId, persona: lead.persona, role: 'assistant', content: text, author: 'humano' });
 
       // Quem escreve a mao fica com a conversa. Sem isto a IA respondia a
       // seguir e contradizia o que o operador acabou de dizer.
-      await setHumanHandover(chatId, true);
+      await setHumanHandover(chatId, lead.persona, true);
       invalidateChat(chatId);
 
       log.info(`resposta manual enviada ao chat ${chatId} (message_id ${sent.message_id})`);
@@ -468,7 +526,7 @@ export function createInboxRouter(): Router {
       const description = error instanceof GrammyError ? error.description : String(error);
 
       if (/bot was blocked|user is deactivated|chat not found/i.test(description)) {
-        await markBlocked(chatId);
+        await markBlocked(chatId, lead.persona);
         log.info(`chat ${chatId} bloqueou o bot; marcado`);
         res.status(409).json({ error: 'este lead bloqueou o bot', blocked: true });
         return;
@@ -495,6 +553,9 @@ export function createInboxRouter(): Router {
         res.status(400).json({ error: 'chat_id invalido' });
         return;
       }
+
+      const lead = await leadDoPedido(req, res, chatId);
+      if (!lead) return;
 
       const bytes = req.body;
 
@@ -523,6 +584,7 @@ export function createInboxRouter(): Router {
 
         await addMessage({
           chatId,
+          persona: lead.persona,
           role: 'assistant',
           content: caption,
           author: 'humano',
@@ -530,7 +592,7 @@ export function createInboxRouter(): Router {
           mediaKind: 'photo',
         });
 
-        await setHumanHandover(chatId, true);
+        await setHumanHandover(chatId, lead.persona, true);
         invalidateChat(chatId);
 
         log.info(`imagem enviada a mao ao chat ${chatId} (${bytes.length} bytes)`);
@@ -539,7 +601,7 @@ export function createInboxRouter(): Router {
         const description = error instanceof GrammyError ? error.description : String(error);
 
         if (/bot was blocked|user is deactivated|chat not found/i.test(description)) {
-          await markBlocked(chatId);
+          await markBlocked(chatId, lead.persona);
           log.info(`chat ${chatId} bloqueou o bot; marcado`);
           res.status(409).json({ error: 'este lead bloqueou o bot', blocked: true });
           return;
@@ -602,9 +664,12 @@ export function createInboxRouter(): Router {
       return;
     }
 
+    const lead = await leadDoPedido(req, res, chatId);
+    if (!lead) return;
+
     const enabled = Boolean((req.body as { enabled?: unknown })?.enabled);
 
-    await setHumanHandover(chatId, enabled);
+    await setHumanHandover(chatId, lead.persona, enabled);
     // Corta qualquer turno em voo, para a IA nao falar depois de o operador
     // ter assumido a conversa.
     if (enabled) invalidateChat(chatId);
@@ -637,17 +702,15 @@ export function createInboxRouter(): Router {
       return;
     }
 
+    const lead = await leadDoPedido(req, res, chatId);
+    if (!lead) return;
+
     const tipo = String((req.body as { tipo?: unknown })?.tipo ?? '');
     if (tipo !== 'nao_qualificado' && tipo !== 'qualificado') {
       res.status(400).json({ error: 'tipo invalido' });
       return;
     }
 
-    const lead = await getLead(chatId);
-    if (!lead) {
-      res.status(404).json({ error: 'lead desconhecido' });
-      return;
-    }
 
     const texto = guiaoDisparoManual(tipo, lead.firstName);
 
@@ -659,7 +722,7 @@ export function createInboxRouter(): Router {
       // Gravada como 'sistema': nao foi a IA a compo-la nem fui eu a escreve-la,
       // saiu de um guiao. Continua a ser uma mensagem REAL enviada ao lead, por
       // isso aparece na conversa e na pre-visualizacao como qualquer outra.
-      await addMessage({ chatId, role: 'assistant', content: texto, author: 'sistema' });
+      await addMessage({ chatId, persona: lead.persona, role: 'assistant', content: texto, author: 'sistema' });
 
       log.info(`remarketing manual (${tipo}) enviado ao chat ${chatId}`);
       res.json({ ok: true, texto, messageId: sent.message_id });
@@ -667,7 +730,7 @@ export function createInboxRouter(): Router {
       const description = error instanceof GrammyError ? error.description : String(error);
 
       if (error instanceof GrammyError && /blocked|deactivated/i.test(description)) {
-        await markBlocked(chatId);
+        await markBlocked(chatId, lead.persona);
       }
 
       log.error(`falha no remarketing manual ao chat ${chatId}`, error);
@@ -683,9 +746,12 @@ export function createInboxRouter(): Router {
       return;
     }
 
+    const lead = await leadDoPedido(req, res, chatId);
+    if (!lead) return;
+
     const pinned = Boolean((req.body as { pinned?: unknown })?.pinned);
 
-    await setPinned(chatId, pinned);
+    await setPinned(chatId, lead.persona, pinned);
     log.info(`chat ${chatId}: ${pinned ? 'afixado' : 'desafixado'}`);
     res.json({ ok: true, pinned });
   });
@@ -704,10 +770,13 @@ export function createInboxRouter(): Router {
       return;
     }
 
+    const lead = await leadDoPedido(req, res, chatId);
+    if (!lead) return;
+
     const aprovado = (req.body as { aprovado?: unknown })?.aprovado !== false;
     const stage: FunnelStage = aprovado ? 'acesso_liberado' : 'comprovativo_recebido';
 
-    await setStage(chatId, stage);
+    await setStage(chatId, lead.persona, stage);
     log.info(`chat ${chatId}: marcado como ${stage} a mao`);
 
     if (!aprovado) {
@@ -718,13 +787,8 @@ export function createInboxRouter(): Router {
     // Aprovar devolve a conversa a IA: a partir daqui ela trata de duvidas de
     // acesso e do acompanhamento. A foto dele tinha-a passado para a minha
     // mao, e se isso ficasse ligado o lead nao voltava a ter resposta.
-    await setHumanHandover(chatId, false);
+    await setHumanHandover(chatId, lead.persona, false);
 
-    const lead = await getLead(chatId);
-    if (!lead) {
-      res.status(404).json({ error: 'lead desconhecido' });
-      return;
-    }
 
     void sendVipWelcome(lead).then((linkEnviado) => {
       if (!linkEnviado) log.error(`chat ${chatId}: aprovado mas o link nao saiu`);

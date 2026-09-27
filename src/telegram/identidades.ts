@@ -19,6 +19,7 @@ import type { Api } from 'grammy';
 
 import { leadsSemNome, setIdentity } from '../db/database';
 import { createLogger } from '../utils/logger';
+import { type IdPersona } from '../personas/ids';
 
 const log = createLogger('identidades');
 
@@ -33,8 +34,16 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * Devolve quantos ficaram preenchidos. Nunca lanca: um lead que o Telegram
  * recuse (bloqueou o bot, apagou a conta) e saltado, e os outros seguem.
  */
-export async function preencherNomes(api: Api, limite = 200): Promise<number> {
-  const pendentes = await leadsSemNome(limite);
+/**
+ * A `api` e a persona andam juntas de proposito: um chat_id pergunta-se ao bot
+ * que o recebeu, e o nome que vem dali pertence ao lead DESSE influencer.
+ */
+export async function preencherNomes(
+  api: Api,
+  persona: IdPersona,
+  limite = 200,
+): Promise<number> {
+  const pendentes = await leadsSemNome(persona, limite);
   if (pendentes.length === 0) return 0;
 
   log.info(`${pendentes.length} lead(s) sem nome; a perguntar ao Telegram`);
@@ -55,7 +64,7 @@ export async function preencherNomes(api: Api, limite = 200): Promise<number> {
 
       if (!firstName && !username) continue;
 
-      await setIdentity(chatId, { firstName, lastName, username });
+      await setIdentity(chatId, persona, { firstName, lastName, username });
       preenchidos += 1;
     } catch (error) {
       // Bloqueou o bot, apagou a conta, ou o id ja nao existe. Nao ha nada a

@@ -62,19 +62,38 @@ function clienteDaPersona(persona: IdPersona): Bot | null {
 /**
  * O Telegram disse mesmo que este lead nos bloqueou?
  *
- * "chat not found" NAO conta, e e por isso que esta funcao existe. O Telegram
- * devolve-o em dois casos muito diferentes: a quem bloqueou, e a quem nunca
- * falou com aquele bot. Trata-los como o mesmo ja nos custou leads duas vezes —
- * no remarketing, que os riscava de todas as campanhas, e aqui, que dizia a
- * quem estava a escrever a mao que o lead tinha bloqueado quando o erro era
- * nosso.
+ * SO duas respostas dizem que a decisao foi DELE: "bot was blocked by the user"
+ * e "user is deactivated". Tudo o resto e um problema de transporte nosso.
+ *
+ * Duas que ja estiveram nesta lista e sairam, cada uma a seu tempo:
+ *
+ * - "chat not found" — o Telegram devolve-o tanto a quem bloqueou como a quem
+ *   nunca falou com aquele bot. Estava aqui, e marcava leads do Ivan como
+ *   bloqueados porque o painel lhes escrevia pelo bot do El Pedrito.
+ * - "bot can't initiate conversation with a user" — quer dizer que nunca houve
+ *   conversa por este caminho, nao que ele nos tenha posto fora. E exactamente
+ *   o que o Telegram passa a responder para TODOS os leads que vieram pela
+ *   conta do El Pedrito assim que o atendimento passa para o bot: eles nunca
+ *   fizeram /start ao bot. Deixa-lo aqui riscava-os a todos de uma vez.
  *
  * Marcar a mais e caro e silencioso: o lead sai de todas as campanhas e nunca
  * mais leva uma mensagem, e ninguem da por isso. Marcar a menos custa uma
  * chamada falhada de vez em quando. Na duvida, nao se marca.
  */
 function mesmoBloqueado(descricao: string): boolean {
-  return /bot was blocked|user is deactivated|bot can't initiate conversation/i.test(descricao);
+  return /bot was blocked|user is deactivated/i.test(descricao);
+}
+
+/**
+ * O lead nunca falou com este bot, logo o bot nao lhe pode escrever primeiro.
+ *
+ * Nao e um bloqueio e nao e uma avaria: e o preco de mudar o atendimento da
+ * conta para o bot. Vale a pena distinguir porque a mensagem que o operador le
+ * no painel e diferente — aqui ha uma coisa que ELE pode fazer (falar-lhe pela
+ * conta, ou esperar que o lead escreva primeiro), e num bloqueio nao ha.
+ */
+function naoPodeComecar(descricao: string): boolean {
+  return /can't initiate conversation|chat not found/i.test(descricao);
 }
 
 /**
@@ -532,6 +551,19 @@ export function createInboxRouter(): Router {
         return;
       }
 
+      // Nao bloqueou: e que nunca falou com ESTE bot. Nao se marca nada, e
+      // diz-se-lhe o que se passa em vez de um erro cru do Telegram.
+      if (naoPodeComecar(description)) {
+        log.info(`chat ${chatId} (${lead.persona}): o bot nao pode comecar a conversa`);
+        res.status(409).json({
+          error:
+            'este lead nunca falou com o bot, por isso o bot nao lhe pode escrever primeiro. '
+            + 'Ele veio pela conta. So volta a ser possivel quando ELE escrever.',
+          naoIniciavel: true,
+        });
+        return;
+      }
+
       log.error(`falha a responder a mao ao chat ${chatId}`, description);
       res.status(502).json({ error: description });
     }
@@ -612,6 +644,15 @@ export function createInboxRouter(): Router {
           await markBlocked(chatId, lead.persona);
           log.info(`chat ${chatId} bloqueou o bot; marcado`);
           res.status(409).json({ error: 'este lead bloqueou o bot', blocked: true });
+          return;
+        }
+
+        if (naoPodeComecar(description)) {
+          log.info(`chat ${chatId} (${lead.persona}): o bot nao pode comecar a conversa`);
+          res.status(409).json({
+            error: 'este lead nunca falou com o bot; so volta a ser possivel quando ELE escrever.',
+            naoIniciavel: true,
+          });
           return;
         }
 

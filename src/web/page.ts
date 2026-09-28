@@ -21,8 +21,19 @@ export const ADMIN_HTML = String.raw`<!doctype html>
     --texto: #e6eaef; --fraco: #8e9aa8; --recebida: #1f262e;
     --enviada: #1c4532; --manual: #3a2f12; --auto: #2a2330;
     --accao: #2f81f7; --perigo: #d1434b;
+    /* O bloco .abas usava estas duas sem elas existirem em lado nenhum. Uma
+       var() indefinida torna a declaracao invalida e a propriedade cai para o
+       valor inicial ou herdado: as abas inactivas ficavam da mesma cor da
+       activa, e o sublinhado funcionava por acidente (currentColor). */
+    --suave: #8e9aa8; --acento: #2f81f7;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  /* O [hidden] do browser perde para QUALQUER regra de autor que declare
+     display, e ha duas: '#lista .abas' e '.painel-conta > div'. Por causa
+     disso os quatro passos do assistente da conta apareciam todos ao mesmo
+     tempo — incluindo a caixa com a USERBOT_SESSION, que vale tanto como a
+     conta. E a barra de abas nao se escondia com um bot so. */
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--fundo); color: var(--texto);
     font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -30,7 +41,16 @@ export const ADMIN_HTML = String.raw`<!doctype html>
   }
   button, input, textarea, select { font: inherit; color: inherit; }
   .ecra { display: none; }
-  .ecra.activo { display: flex; flex-direction: column; min-height: 100dvh; }
+  /*
+   * ALTURA FIXA, e nao minima. Era 'min-height' e isso fazia o contentor
+   * crescer com o conteudo, portanto quem rolava era o DOCUMENTO e nao a lista
+   * de mensagens: o compositor ficava no fundo da pagina em vez do fundo do
+   * ecra (era preciso arrastar a conversa toda para baixo para escrever) e a
+   * barra ia-se embora com o scroll (era preciso subir tudo para carregar no
+   * '‹'). Ver tambem o 'min-height: 0' no '.mensagens' e o 'flex: 0 0 auto'
+   * na '.barra' — as tres coisas sao precisas, nenhuma chega sozinha.
+   */
+  .ecra.activo { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
 
   /* --- login --- */
   #login { justify-content: center; align-items: center; padding: 24px; gap: 14px; }
@@ -53,7 +73,16 @@ export const ADMIN_HTML = String.raw`<!doctype html>
 
   /* --- barra --- */
   .barra {
-    position: sticky; top: 0; z-index: 5; background: var(--painel);
+    /*
+     * 'flex: 0 0 auto' para o flexbox nao a encolher para caber: com altura
+     * fixa no ecra, um compositor de tres linhas comecava a comer a barra.
+     *
+     * E deixa de ser 'sticky'. Ja nao precisa — com a coluna de altura fixa
+     * ela e um item parado — e era o sticky que punha as DUAS barras do ecra
+     * da conversa coladas ao mesmo 'top: 0', uma por cima da outra, com a do
+     * remarketing a tapar a seta de retroceder.
+     */
+    flex: 0 0 auto; z-index: 5; background: var(--painel);
     border-bottom: 1px solid var(--linha); padding: 10px 12px;
     padding-top: max(10px, env(safe-area-inset-top));
     display: flex; gap: 8px; align-items: center;
@@ -96,7 +125,7 @@ export const ADMIN_HTML = String.raw`<!doctype html>
     }
     .filtros { padding: 10px 12px; display: flex; gap: 8px; }
   #lista .filtros select { width: auto; flex-shrink: 0; }
-  .conversas { flex: 1; overflow-y: auto; }
+  .conversas { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
   .conversa {
     display: flex; gap: 11px; padding: 12px; border-bottom: 1px solid var(--linha);
     cursor: pointer; align-items: flex-start;
@@ -124,7 +153,14 @@ export const ADMIN_HTML = String.raw`<!doctype html>
   .etiqueta.afixado { background: #2b2540; color: #b9a6ff; }
 
   /* --- conversa --- */
-  .mensagens { flex: 1; overflow-y: auto; padding: 12px; display: flex;
+  /*
+   * 'min-height: 0' e o que autoriza este item a ficar MAIS PEQUENO do que o
+   * conteudo. Um item flex tem 'min-height: auto' por omissao, que resolve
+   * para o tamanho do conteudo — sem isto o 'overflow-y: auto' e decorativo,
+   * mesmo com o contentor de altura fixa. E a armadilha classica do flexbox.
+   */
+  .mensagens { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    overscroll-behavior: contain; padding: 12px; display: flex;
     flex-direction: column; gap: 8px; }
   .bolha { max-width: 82%; padding: 8px 12px; border-radius: 14px; white-space: pre-wrap;
     word-wrap: break-word; }
@@ -137,11 +173,17 @@ export const ADMIN_HTML = String.raw`<!doctype html>
     text-align: center; max-width: 90%; }
 
   .compositor {
+    /* Nao encolhe: ver o comentario na .barra. */
+    flex: 0 0 auto;
     border-top: 1px solid var(--linha); background: var(--painel); padding: 10px;
     padding-bottom: max(10px, env(safe-area-inset-bottom));
     display: flex; gap: 8px; align-items: flex-end;
   }
-  .compositor textarea { resize: none; max-height: 120px; }
+  /* 16px e o minimo que o iOS aceita sem fazer zoom ao focar. Abaixo disso
+     ele amplia a pagina e desalinha tudo. Nunca resolver isto com
+     maximum-scale=1, que tira o zoom a quem precisa dele. */
+  .compositor textarea { resize: none; max-height: 120px; font-size: 16px; }
+  #procurar { font-size: 16px; }
   .compositor .anexo {
     background: none; border: 0; color: var(--fraco); font-size: 24px;
     padding: 6px 4px; cursor: pointer; line-height: 1; flex-shrink: 0;

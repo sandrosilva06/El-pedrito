@@ -118,6 +118,33 @@ export interface Lead {
    */
   perguntasFeitas: string[];
   /**
+   * As casas onde ele TEM conta — nunca mais se lhe oferecem.
+   *
+   * Inclui tanto as que ele ja tinha de antes como aquela onde se registou pelo
+   * nosso link: para efeitos de escolha da casa seguinte, dao no mesmo. Uma
+   * conta que ele ja tivesse nao gera comissao de registo, portanto insistir na
+   * mesma casa e trabalho sem retorno — foi assim que se perdeu o primeiro lead
+   * que disse "ja tenho conta".
+   */
+  casasComConta: string[];
+  /**
+   * A casa cujo link ele JA TEM na mao. Null enquanto nao lhe saiu nenhum.
+   *
+   * Unico campo de facto deste projecto sem a guarda "a primeira resposta e a
+   * que fica": quando se muda de casa, este valor TEM de ser substituido.
+   */
+  casaOferecida: string | null;
+  /**
+   * Ele confirmou que a conta e NOVA, criada pelo nosso link.
+   *
+   * E o que destranca o deposito. "Ja tenho conta" quer dizer duas coisas
+   * opostas — ja tinha de antes, ou acabei de criar pelo teu link — e a
+   * diferenca e a conversao inteira. Enquanto isto for falso, o funil nao passa
+   * de `registo_enviado`, por muito que o modelo insista que o registo esta
+   * feito. Insistiu tres vezes, com o mesmo lead.
+   */
+  contaConfirmada: boolean;
+  /**
    * Em que trabalha, nas palavras dele. Null enquanto nao se souber.
    *
    * Ao contrario do cantao e da experiencia, nao ha detector em codigo: uma
@@ -225,6 +252,9 @@ interface LeadRow {
   oficio_pedrito: string | null;
   tag: string | null;
   perguntas_feitas: string | null;
+  casas_com_conta: string | null;
+  casa_oferecida: string | null;
+  conta_confirmada: number | null;
   job: string | null;
   betting_experience: string | null;
   first_name: string | null;
@@ -469,6 +499,11 @@ const COLUNAS: Array<{ tabela: string; coluna: string; sqlite: string; postgres:
   { tabela: 'messages', coluna: 'author', sqlite: "TEXT NOT NULL DEFAULT 'bot'", postgres: "TEXT NOT NULL DEFAULT 'bot'" },
   { tabela: 'messages', coluna: 'media_file_id', sqlite: 'TEXT', postgres: 'TEXT' },
   { tabela: 'messages', coluna: 'media_kind', sqlite: 'TEXT', postgres: 'TEXT' },
+  // A conta do lead nas casas de afiliado. So o Ivan tem mais do que uma casa;
+  // para o El Pedrito estas tres ficam vazias e ninguem lhes toca.
+  { tabela: 'leads', coluna: 'casas_com_conta', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'casa_oferecida', sqlite: 'TEXT', postgres: 'TEXT' },
+  { tabela: 'leads', coluna: 'conta_confirmada', sqlite: 'INTEGER NOT NULL DEFAULT 0', postgres: 'INTEGER NOT NULL DEFAULT 0' },
 ];
 
 async function addColumnIfMissing(
@@ -580,6 +615,9 @@ function mapLead(row: LeadRow): Lead {
     oficioPedrito: row.oficio_pedrito,
     tag: row.tag,
     perguntasFeitas: (row.perguntas_feitas ?? '').split(',').filter(Boolean),
+    casasComConta: (row.casas_com_conta ?? '').split(',').filter(Boolean),
+    casaOferecida: row.casa_oferecida || null,
+    contaConfirmada: row.conta_confirmada === 1,
     job: row.job,
     bettingExperience: row.betting_experience,
     firstName: row.first_name,
@@ -792,6 +830,28 @@ const SQL = {
              WHEN ',' || perguntas_feitas || ',' LIKE '%,' || ? || ',%' THEN perguntas_feitas
              ELSE perguntas_feitas || ',' || ?
            END
+     WHERE chat_id = ? AND persona = ?
+  `,
+  // Mesmo molde do marcarPergunta, e pela mesma razao.
+  marcarCasaComConta: `
+    UPDATE leads
+       SET casas_com_conta = CASE
+             WHEN casas_com_conta IS NULL OR casas_com_conta = '' THEN ?
+             WHEN ',' || casas_com_conta || ',' LIKE '%,' || ? || ',%' THEN casas_com_conta
+             ELSE casas_com_conta || ',' || ?
+           END,
+           updated_at = datetime('now')
+     WHERE chat_id = ? AND persona = ?
+  `,
+  // SEM a guarda "a primeira e a que fica" que os outros campos de facto tem:
+  // quando se muda de casa, este valor TEM de ser substituido. E o unico sitio
+  // do projecto onde escrever por cima e o comportamento certo.
+  setCasaOferecida: `
+    UPDATE leads SET casa_oferecida = ?, updated_at = datetime('now')
+     WHERE chat_id = ? AND persona = ?
+  `,
+  setContaConfirmada: `
+    UPDATE leads SET conta_confirmada = ?, updated_at = datetime('now')
      WHERE chat_id = ? AND persona = ?
   `,
   setIdentity: `
@@ -1686,6 +1746,38 @@ export async function setTratamento(chatId: number,
 export async function marcarPerguntaFeita(chatId: number,
   persona: IdPersona, chave: string): Promise<void> {
   await conn().run(SQL.marcarPergunta, [chave, chave, chave, chatId, persona]);
+}
+
+/**
+ * Regista que o lead TEM conta nesta casa — de antes ou por se ter registado
+ * agora. Para efeitos de escolher a casa seguinte, dao no mesmo: nenhuma das
+ * duas se volta a oferecer.
+ */
+export async function marcarCasaComConta(chatId: number,
+  persona: IdPersona, casa: string): Promise<void> {
+  await conn().run(SQL.marcarCasaComConta, [casa, casa, casa, chatId, persona]);
+}
+
+/** A casa cujo link ele acabou de receber. Substitui a anterior, de proposito. */
+export async function setCasaOferecida(chatId: number,
+  persona: IdPersona, casa: string): Promise<void> {
+  await conn().run(SQL.setCasaOferecida, [casa, chatId, persona]);
+}
+
+/** Ele confirmou que a conta e nova. E isto que destranca o deposito. */
+export async function setContaConfirmada(chatId: number,
+  persona: IdPersona, valor: boolean): Promise<void> {
+  await conn().run(SQL.setContaConfirmada, [valor ? 1 : 0, chatId, persona]);
+}
+
+/**
+ * Onde e que este estagio fica na ordem do funil.
+ *
+ * Exposto porque o `bot.ts` precisa de comparar dois estagios para travar o
+ * avanco sem a conta confirmada, e a ordem vivia so aqui dentro.
+ */
+export function ordemDoEstagio(stage: FunnelStage): number {
+  return STAGE_ORDER.get(stage) ?? 0;
 }
 
 /** Marca que o nome ja foi perguntado, mesmo que ele nao responda. */

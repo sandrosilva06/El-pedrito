@@ -15,6 +15,10 @@ import {
   setHumanHandover,
   setJob,
   marcarPerguntaFeita,
+  marcarCasaComConta,
+  setCasaOferecida,
+  setContaConfirmada,
+  ordemDoEstagio,
   setAtencao,
   setNomePerguntado,
   setOficioPedrito,
@@ -28,6 +32,8 @@ import {
 } from '../db/database';
 import { planStrategy, proximaPergunta, type SalesDirective } from '../services/strategist';
 import { splitIntoBubbles } from '../services/writer';
+import { linkVaiSair } from '../services/writer';
+import { decidirCasa, PERGUNTA_ORIGEM, type EstadoDaCasa } from '../services/casas';
 import { writeReply } from '../services/writer';
 import { createLogger } from '../utils/logger';
 import { sanitiseDashes } from '../utils/text';
@@ -561,6 +567,50 @@ async function recordExperience(
 }
 
 /**
+ * Grava o que se decidiu sobre a casa deste turno.
+ *
+ * A `casa_oferecida` so se grava se o link tiver APARECIDO no texto entregue, e
+ * nao quando foi mandado aparecer. Significa "ele tem este link na mao", e se o
+ * redator se esquecer de o escrever, dar a casa por oferecida trancava o lead
+ * numa casa de que ele nunca ouviu falar. O aviso no log e a unica forma de
+ * alguem dar por isso.
+ */
+async function registarCasa(
+  chatId: number,
+  persona: IdPersona,
+  casa: EstadoDaCasa | null | undefined,
+  answer: string,
+  directive: SalesDirective,
+  turn: number,
+): Promise<void> {
+  if (!casa) return;
+
+  if (casa.tipo === 'muda') {
+    await marcarCasaComConta(chatId, persona, casa.queimada.id);
+    log.info(`chat=${chatId}: ja tinha conta na ${casa.queimada.id}, passa para a ${casa.casa.id}`);
+  }
+
+  if (casa.tipo === 'conta_nova') {
+    await setContaConfirmada(chatId, persona, true);
+    await marcarCasaComConta(chatId, persona, casa.casa.id);
+    log.info(`chat=${chatId}: conta NOVA confirmada na ${casa.casa.id}`);
+  }
+
+  if (casa.tipo === 'confirmar_origem') {
+    await marcarPerguntaFeita(chatId, persona, PERGUNTA_ORIGEM);
+  }
+
+  const aOferecer = 'casa' in casa ? casa.casa : null;
+  if (!aOferecer || !linkVaiSair(directive, turn)) return;
+
+  if (answer.includes(aOferecer.link)) {
+    await setCasaOferecida(chatId, persona, aOferecer.id);
+  } else {
+    log.warn(`chat=${chatId}: o redator nao incluiu o link da ${aOferecer.id} na resposta`);
+  }
+}
+
+/**
  * Guarda a hora combinada com o lead, convertida do fuso dele para UTC. Uma
  * hora ja passada e do dia seguinte: quem diz "as 18h" as 19h esta a falar de
  * amanha, nao de ha uma hora.
@@ -693,18 +743,96 @@ async function runFunnelTurn(
       // ela que se marca como feita no fim do turno.
       const perguntaDoTurno = proximaPergunta(persona, current);
 
+      // A mesma contagem que o redator faz, para os dois concordarem sobre em
+      // que ponto da sequencia a conversa esta.
+      const turnoDaConversa = history.filter((m) => m.role === 'user').length + 1;
+
       const directive = await planStrategy({
         persona: persona,
         lead: current,
         history,
         incoming,
       });
+
+      // Que casa se oferece, e o que fazer com o que ele disse da conta. Null
+      // para uma persona de casa unica — o El Pedrito nao passa daqui.
+      const casa = decidirCasa({ persona, lead: current, incoming, directive });
+
+      // Nao ha casa nenhuma para lhe dar. Nao se gasta o redator para deitar
+      // fora o texto: a conversa passa para uma pessoa aqui mesmo.
+      if (casa?.tipo === 'sem_casas') {
+        if (currentGeneration(chatId) !== generation) return;
+
+        if (options.storeIncoming) {
+          await addMessage({ chatId, persona: idPersona, role: 'user', content: incoming });
+        }
+
+        await setHumanHandover(chatId, idPersona, true);
+        stopTyping();
+
+        const nomes = casa.comConta
+          .map((id: string) => persona.houses.find((h) => h.id === id)?.label ?? id)
+          .join(', ');
+
+        // Duas saidas diferentes, e o operador precisa de saber qual e: ou ele
+        // ja tem conta em tudo, ou ficou por esclarecer se a conta e nova. O
+        // que ele le aqui e tudo o que tem para pegar na conversa.
+        const motivo = casa.emDuvida
+          ? {
+              titulo: 'nao se percebeu se a conta dele e nova',
+              detalhe:
+                `Ele diz que ja tem conta na ${casa.emDuvida.label}, foi-lhe perguntado se a ` +
+                'criou agora pelo nosso link, e voltou a dizer o mesmo sem esclarecer. Se a ' +
+                'conta for antiga nao ha comissao de registo e ha que lhe dar outra casa.'
+                + (nomes ? ` Casas onde ja tem conta: ${nomes}.` : ''),
+            }
+          : {
+              titulo: 'ja tem conta em todas as casas',
+              detalhe: nomes
+                ? `Casas onde ele ja tem conta: ${nomes}. Sem casa nova para oferecer.`
+                : 'Nao ha nenhuma casa com link configurado para lhe oferecer.',
+            };
+
+        log.info(`conversa entregue a mao chat=${chatId}: ${motivo.titulo}`);
+        await avisarDaEntrega(idPersona, current, incoming, motivo);
+        return;
+      }
+
+      // A GUARDA DO DEPOSITO, e a razao de tudo isto existir.
+      //
+      // Enquanto ele nao confirmar que a conta e NOVA, o funil nao passa de
+      // `registo_enviado`. O modelo pode devolver `registado` as vezes que
+      // quiser — e devolveu tres, ao mesmo lead, enquanto ele escrevia "ja
+      // tenho conta". A decisao e de codigo porque e dinheiro.
+      //
+      // So trava quem ainda NAO passou: um lead que ja esteja em
+      // `deposito_enviado` no dia em que esta coluna nasce tem-na a zero, e
+      // puxa-lo para tras seria mandar-lhe a regra do registo a cara.
+      if (
+        casa
+        && !current.contaConfirmada
+        && casa.tipo !== 'conta_nova'
+        && ordemDoEstagio(current.stage) < ordemDoEstagio('registado')
+        && ordemDoEstagio(directive.stage) > ordemDoEstagio('registo_enviado')
+      ) {
+        log.info(
+          `chat=${chatId}: o estagio ficou em registo_enviado — a conta ainda nao foi confirmada`,
+        );
+        directive.stage = 'registo_enviado';
+      }
+
+      // Com a duvida de pe nao se repete o link; e quando se muda de casa, o
+      // link novo TEM de sair, senao a mudanca nao chega ao lead.
+      if (casa?.tipo === 'confirmar_origem') directive.includeLink = false;
+      if (casa?.tipo === 'muda') directive.includeLink = true;
+
       const answer = await writeReply({
         persona: persona,
         lead: current,
         history,
         incoming,
         directive,
+        casa,
       });
 
       // As duas chamadas acima levam segundos, e o /parar pode ter chegado no
@@ -752,6 +880,7 @@ async function runFunnelTurn(
       recordJob(chatId, idPersona, current.job, directive);
       recordExperience(chatId, idPersona, current.bettingExperience, incoming, directive);
       recordFactosNovos(chatId, current, directive);
+      await registarCasa(chatId, idPersona, casa, answer, directive, turnoDaConversa);
 
       // A pergunta que este turno tinha para fazer fica marcada como FEITA,
       // tenha ele respondido ou nao. E o que garante que ela sai uma vez so:

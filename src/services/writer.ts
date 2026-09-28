@@ -1,8 +1,9 @@
 import { GoogleGenAI, ThinkingLevel, type Content } from '@google/genai';
 
 import { env } from '../config/env';
-import { resolveHouseLink } from '../personas/types';
+import { resolveHouse, resolveHouseLink } from '../personas/types';
 import type { Persona } from '../personas/types';
+import type { EstadoDaCasa } from './casas';
 import type { Lead, StoredMessage } from '../db/database';
 import { createLogger } from '../utils/logger';
 import { deveCumprimentar, saudacaoAgora } from '../utils/saudacao';
@@ -84,7 +85,35 @@ export function phaseRule(
   persona: Persona,
   turn: number,
   stage: SalesDirective['stage'],
+  /**
+   * A decisao da casa deste turno, quando a persona tem casas.
+   *
+   * Opcional e no fim: quem chama com tres argumentos cai nas fases de sempre.
+   */
+  casa?: EstadoDaCasa | null,
 ): string {
+  // As fases da casa ganham ao estagio, e tem de ser assim: um lead a dizer
+  // que ja tem conta esta a travar o funil, e a regra de fase do estagio
+  // mandava-o seguir em frente. Foi essa colisao que custou o lead.
+  if (casa?.tipo === 'confirmar_origem') {
+    return (
+      'FASE — CONFIRMAR A CONTA: ele diz que tem conta, mas nao se sabe se ja a ' +
+      'tinha de antes ou se a acabou de criar pelo teu link, e a diferenca decide ' +
+      'tudo. Pergunta SO isso, numa pergunta de sim ou nao, e nada mais. PROIBIDO ' +
+      'falar de deposito, PROIBIDO mandar link e PROIBIDO dar o registo por feito.'
+    );
+  }
+
+  if (casa?.tipo === 'muda') {
+    return (
+      `FASE — MUDAR DE CASA: ele ja tinha conta na ${casa.queimada.label} de antes, ` +
+      'e uma conta antiga nao serve. Sem drama e sem o fazer sentir mal: nesse ' +
+      `caso e por outra. Manda o link da ${casa.casa.label} e pede-lhe para criar ` +
+      'a conta ai. PROIBIDO falar de deposito nesta mensagem e PROIBIDO voltar a ' +
+      `mandar o link da ${casa.queimada.label}.`
+    );
+  }
+
   const early = stage === 'novo' || stage === 'qualificacao';
 
   if (early && turn <= 2) {
@@ -121,7 +150,23 @@ export function phaseRule(
       'ABRIU, nao se ja depositou. Se deu erro, diz-lhe para copiar o link e ' +
       'colar noutro navegador, e nao fales de deposito enquanto isso nao ' +
       'estiver resolvido. Oferece levar o registo com ele, passo a passo, e se ' +
-      'ele disser que travou pergunta EM QUE PARTE travou.'
+      'ele disser que travou pergunta EM QUE PARTE travou.' +
+      // A PORTA 2, e so para quem tem varias casas.
+      //
+      // Ate aqui esta fase so sabia tratar de um bloqueio tecnico — "a pagina
+      // nao abriu" — e nao tinha saida nenhuma para quem esta bloqueado por JA
+      // TER conta. E esse o caso que custou o lead do Ivan.
+      //
+      // Numa persona de casa unica a pergunta nao teria resposta util: ele nao
+      // tem para onde ir, e o El Pedrito ja trata o "ja tenho conta noutra
+      // casa" com a politica dele, que e a oposta. Por isso a frase so entra
+      // quando ha casas, e o prompt do El Pedrito fica byte a byte como estava.
+      (persona.houses.length > 0
+        ? ' A CONTA TEM DE SER NOVA, criada pelo link que lhe deste: diz-lhe isso ' +
+          'e CONFIRMA, com uma pergunta de sim ou nao, se foi agora que a criou ' +
+          'pelo teu link. Se ele ja tinha essa conta de antes, isso NAO conta ' +
+          'como registo: nao fales de deposito e trata disso com ele.'
+        : '')
     );
   }
 
@@ -170,6 +215,18 @@ export function phaseRule(
  * micro-compromisso que faz a pessoa avancar, e a conversa passa a parecer o
  * spam de casino que toda a gente ja recebeu.
  */
+/**
+ * O link vai mesmo sair nesta mensagem?
+ *
+ * As duas condicoes ja estavam a ser combinadas dentro do
+ * `buildDirectiveBlock`, e o `bot.ts` precisa da MESMA resposta para saber se
+ * pode dar a casa por oferecida. Duas deducoes separadas da mesma regra e como
+ * se desalinham.
+ */
+export function linkVaiSair(directive: SalesDirective, turn: number): boolean {
+  return directive.includeLink && linkAllowed(turn, directive.stage);
+}
+
 export function linkAllowed(turn: number, stage: SalesDirective['stage']): boolean {
   const early = stage === 'novo' || stage === 'qualificacao';
   return !early || turn >= 5;
@@ -240,16 +297,42 @@ export function buildDirectiveBlock(
    * cumprimenta no inicio da conversa ou no primeiro contacto de um dia novo.
    */
   ultimaMensagemEm?: string | null,
+  /**
+   * O que o `decidirCasa` decidiu para este turno, quando ha casas.
+   *
+   * Opcional e no fim para nao partir quem ja chama esta funcao com cinco ou
+   * seis argumentos. Ausente, cai-se no estado guardado no lead.
+   */
+  casa?: EstadoDaCasa | null,
 ): string {
   const sendLink = directive.includeLink && linkAllowed(turn, directive.stage);
 
-  // A casa vem da persona: o El Pedrito tem uma so, o Ivan tem tres e a
-  // diretriz escolhe. Um link errado aqui e uma comissao para outra pessoa.
-  const link = resolveHouseLink(persona, '');
+  // A casa deste turno.
+  //
+  // Esta linha ja foi `resolveHouseLink(persona, '')` — com a string vazia
+  // escrita a mao, o que fazia o `if (!houseId)` disparar sempre e o link ser
+  // SEMPRE o da casa principal. As outras duas casas do Ivan eram codigo morto,
+  // e um lead que ja tivesse conta na primeira nao tinha para onde ir.
+  //
+  // Um link errado aqui e uma comissao para outra pessoa; um link da casa onde
+  // ele ja esta registado e uma comissao para ninguem.
+  const casaDoTurno =
+    (casa && 'casa' in casa ? casa.casa : null) ?? resolveHouse(persona, lead.casaOferecida ?? '');
+  const link = casaDoTurno?.link || resolveHouseLink(persona, lead.casaOferecida ?? '');
+
+  // O nome da casa acompanha o link, mas SO para quem tem mais do que uma.
+  //
+  // Sem isto o redator so conhecia o `persona.platformName`, que e fixo na casa
+  // principal: a partir da segunda, o Ivan mandava o link do 22 Casino a dizer
+  // "regista-te na Plan Bet". Numa persona de casa unica nao ha ambiguidade
+  // nenhuma para desfazer, e a frase fica byte a byte como estava — o El
+  // Pedrito esta a converter com trafego pago e nao se lhe toca.
+  const nomeDaCasa =
+    persona.houses.length > 0 ? ` da ${casaDoTurno?.label ?? persona.platformName}` : '';
 
   const linkRule =
     sendLink && link
-      ? `Inclui o link de registo exatamente assim: ${link}\n` +
+      ? `Inclui o link de registo${nomeDaCasa} exatamente assim: ${link}\n` +
         `Diz tambem: o deposito minimo e ${persona.minDeposit}; para acompanhar todas as ` +
         `entradas do dia sem esgotar a banca o ideal e comecar com ${persona.suggestedDeposit} ` +
         `(conselho teu, nao requisito); e que basta mandares o print do deposito para ` +
@@ -274,7 +357,7 @@ export function buildDirectiveBlock(
       'nenhuma oferta nem pergunta de vendas.'
     : `PROXIMO PASSO: ${directive.cta}`;
 
-  const phase = phaseRule(persona, turn, directive.stage);
+  const phase = phaseRule(persona, turn, directive.stage, casa);
   const postponement = postponementRule(directive);
 
   const knownRule = buildKnownRule(lead);
@@ -479,8 +562,10 @@ export async function writeReply(params: {
   history: StoredMessage[];
   incoming: string;
   directive: SalesDirective;
+  /** A decisao da casa deste turno, quando a persona tem casas. */
+  casa?: EstadoDaCasa | null;
 }): Promise<string> {
-  const { persona, lead, history, incoming, directive } = params;
+  const { persona, lead, history, incoming, directive, casa } = params;
 
   // Mesma contagem que o estrategista usa, para os dois concordarem sobre em
   // que ponto da sequencia a conversa esta.
@@ -526,6 +611,7 @@ export async function writeReply(params: {
             turn,
             incoming,
             history[history.length - 1]?.createdAt,
+            casa,
           )}`,
           // O redator nao decide nada: a estrategia ja veio pronta. Pensar aqui
           // so adiciona latencia a uma mensagem de 1-3 frases.

@@ -12,7 +12,7 @@
  */
 import { env } from '../config/env';
 import { forceMediumSkinTone, limitEmojis } from '../utils/emoji';
-import { proximaPerguntaDe } from './types';
+import { casaLivre, proximaPerguntaDe, resolveHouse } from './types';
 import type { LeadComFactos, Persona, PersonaHouse, PerguntaFunil } from './types';
 import type { Lead, StoredMessage } from '../db/database';
 
@@ -175,12 +175,22 @@ HISTORIA DO IVAN:
 - E para mostrar que ha caminho, NAO para prometer que ele vai ganhar. Nao
   digas nem sugiras que o resultado dele esta garantido.
 
-LOGICA MULTI-CASA:
-1. Perguntas se ele ja tem conta na ${houses[0]?.label}, a casa principal.
-2. Se NAO tiver: segue pela ${houses[0]?.label}. affiliateHouse="plan_bet".
-3. Se JA tiver: sem drama. Ofereces ${houses[1]?.label} ou ${houses[2]?.label}
-   e deixas escolher. So depois da escolha e que affiliateHouse leva a casa.
-4. affiliateHouse fica VAZIO enquanto nao houver escolha. Nunca adivinhes.
+A CONTA NA CASA — TU NAO ESCOLHES CASA NENHUMA:
+- Qual e a casa deste turno vem no bloco de fase. Nunca a escolhes tu e nunca
+  nomeias outra.
+- O teu trabalho e RELATAR, no campo "contaNaCasa", o que ele disse sobre a
+  conta NESSA casa:
+  · "criou_agora" — SO quando ele diz claramente que criou a conta AGORA, pelo
+    link que tu lhe deste.
+  · "ja_tinha"    — quando ele diz que ja tinha essa conta de antes.
+  · "nao_tem"     — quando ele diz que nao tem conta la.
+  · "indefinido"  — tudo o resto, e em especial "ja tenho conta" dito assim,
+    sem dizer de quando.
+- NAO ADIVINHES. "Ja tenho conta" NAO e um registo feito: tanto pode ser uma
+  conta de ontem como uma de ha tres anos. Dar isso por registo e o erro que
+  faz o lead desistir. Na duvida, "indefinido".
+- Uma conta antiga nao serve, tem de ser criada pelo link. Se ele ja tinha
+  conta, nao ha drama nenhum: quem trata da casa seguinte e o sistema.
 
 O ROBO, EM UMA FRASE:
 - "O robo le a mesa e diz onde apostar." Chega.
@@ -353,8 +363,8 @@ O NEGOCIO:
 - Conselho teu: com ${env.IVAN_SUGGESTED_DEPOSIT} ou mais e que ele escala a
   serio e sente a diferenca. Mas deixa claro que com ${env.IVAN_MIN_DEPOSIT}
   entra na mesma e cresce a partir dai.
-- Casas: ${houses.map((house) => house.label).join(', ')}. Principal:
-  ${houses[0]?.label}.
+- Casas: ${houses.map((house) => house.label).join(', ')}. A casa DESTE turno
+  vem na diretriz — nunca nomeies outra nem empurres uma por iniciativa tua.
 - Acesso sai depois do print do deposito.
 
 O DINHEIRO NAO E PARA TI — martela isto sempre que o valor aparecer:
@@ -451,6 +461,30 @@ function perguntasDoIvan(lead: LeadComFactos): PerguntaFunil[] {
       pergunta: 'se ja joga em casinos online ou se nunca experimentou',
     },
     {
+      /**
+       * A PORTA 1, e e a que resolve o problema de raiz.
+       *
+       * Antes de o link sair, "ja tenho conta" nao tem ambiguidade nenhuma: ele
+       * nao tem link nosso, logo a conta so pode ser de antes. Perguntado aqui,
+       * o primeiro link ja sai da casa certa e nunca se chega ao no que custou
+       * um lead — tres voltas a pedir deposito numa casa onde ele ja estava
+       * registado.
+       *
+       * A posicao importa. E a quarta de cinco, o que a poe no turno em que o
+       * funil fala de condicoes e prontidao, e UM TURNO ANTES de o
+       * `linkAllowed` destrancar o link. Empurrada para o fim, sairia no mesmo
+       * turno do link ou depois dele, e deixava de ser porta.
+       *
+       * Nao nomeia a casa: quem a nomeia e o bloco de fase, a partir do que
+       * esta guardado. Assim a lista de perguntas nao passa a ser mais um sitio
+       * a dizer "Plan Bet".
+       */
+      chave: 'conta',
+      campo: 'conta na casa',
+      valor: (lead.casasComConta ?? []).length > 0 ? 'ja disse onde tem conta' : null,
+      pergunta: 'se ele ja tem conta na casa de que lhe vais falar',
+    },
+    {
       // A coluna chama-se `canton` por ter nascido no funil do El Pedrito, que
       // e suico. Aqui guarda a CIDADE: o publico do Ivan e portugues a viver em
       // Portugal. Renomear a coluna obrigava a mexer na base de dados de
@@ -494,6 +528,25 @@ function faseDoIvan(lead: LeadComFactos, history: StoredMessage[]): string {
     .map((p) => p.campo);
 
   const linhas = [`TURNO NUMERO ${turno}.`];
+
+  // A casa deste turno, lida do que esta guardado — o bloco de fase nao decide
+  // nada, como ja nao decidia nas perguntas. Sem isto o modelo so conhecia a
+  // casa principal e empurrava-a mesmo depois de o lead dizer que ja la tinha
+  // conta.
+  const comConta = lead.casasComConta ?? [];
+  const daVez = resolveHouse(ivan, lead.casaOferecida ?? '') ?? casaLivre(ivan, comConta);
+
+  if (daVez) linhas.push('', `A CASA DESTE TURNO: ${daVez.label}.`);
+
+  if (comConta.length > 0) {
+    const nomes = comConta
+      .map((id: string) => houses.find((h) => h.id === id)?.label ?? id)
+      .join(', ');
+    linhas.push(
+      `Ele JA TEM conta em: ${nomes}. PROIBIDO oferecer-lhe qualquer uma dessas outra vez.`,
+      'Uma conta que ele ja tivesse de antes NAO conta como registo.',
+    );
+  }
 
   if (sabidos.length > 0) {
     linhas.push('', 'O QUE JA SABES DESTE LEAD', ...sabidos);

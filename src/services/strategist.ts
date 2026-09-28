@@ -99,7 +99,23 @@ export interface SalesDirective {
    * outros encerram-na.
    */
   stopReason: StopReason;
+  /**
+   * O que o lead disse sobre a conta na casa de que estao a falar.
+   *
+   * RELATO, nao decisao: este campo nao escolhe casa nenhuma. Quem escolhe e o
+   * `decidirCasa`, a partir do que esta guardado no lead. Ja houve aqui um
+   * campo `affiliateHouse` que punha a escolha — dinheiro — na boca do modelo;
+   * nao volta.
+   *
+   * "indefinido" e o valor certo para "ja tenho conta" dito sem dizer de
+   * quando, e e o mais importante dos quatro: e a frase que custou um lead.
+   */
+  contaNaCasa: ContaNaCasa;
 }
+
+/** O que o lead disse da conta. Ver `contaNaCasa`. */
+export const CONTA_NA_CASA = ['indefinido', 'nao_tem', 'ja_tinha', 'criou_agora'] as const;
+export type ContaNaCasa = (typeof CONTA_NA_CASA)[number];
 
 const responseSchema: Schema = {
   type: Type.OBJECT,
@@ -173,6 +189,18 @@ const responseSchema: Schema = {
         '"parar" (pediu para nao ser incomodado), "menor", "vicio". ' +
         '"nenhum" quando shouldStop=false.',
     },
+    contaNaCasa: {
+      type: Type.STRING,
+      enum: [...CONTA_NA_CASA],
+      description:
+        'O que o lead disse NESTA mensagem sobre ter conta na casa de que estao ' +
+        'a falar. "criou_agora" SO quando ele diz claramente que a criou agora, ' +
+        'pelo link que lhe deste. "ja_tinha" quando diz que ja a tinha de antes. ' +
+        '"nao_tem" quando diz que nao tem conta la. "indefinido" para tudo o ' +
+        'resto — e em especial para "ja tenho conta" dito assim, sem dizer de ' +
+        'quando. ATENCAO: "ja tenho conta" NAO e um registo feito. Dar isso por ' +
+        'registo e o erro que faz o lead desistir. Na duvida, "indefinido".',
+    },
   },
   required: [
     'intent',
@@ -194,6 +222,7 @@ const responseSchema: Schema = {
     'notes',
     'shouldStop',
     'stopReason',
+    'contaNaCasa',
   ],
 };
 
@@ -274,6 +303,8 @@ function fallbackDirective(lead: Lead): SalesDirective {
     notes: '',
     shouldStop: false,
     stopReason: 'nenhum',
+    // 'indefinido' e o valor certo para uma falha: nunca destranca nada.
+    contaNaCasa: 'indefinido',
   };
 }
 
@@ -504,6 +535,13 @@ async function requestDirective(params: {
       stopReason: STOP_REASONS.includes(parsed.stopReason as StopReason)
         ? (parsed.stopReason as StopReason)
         : 'nenhum',
+      // Um valor fora do enum vira 'indefinido', que nao destranca nada. O
+      // molde e o do stopReason, e esta linha e a que faltou ao antigo
+      // `affiliateHouse`: sem ela, o campo chega do modelo e e deitado fora
+      // aqui, em silencio, como aquele era.
+      contaNaCasa: CONTA_NA_CASA.includes(parsed.contaNaCasa as ContaNaCasa)
+        ? (parsed.contaNaCasa as ContaNaCasa)
+        : 'indefinido',
     };
 
     log.debug(`diretriz gerada em ${Date.now() - startedAt}ms`, {

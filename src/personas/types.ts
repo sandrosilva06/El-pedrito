@@ -31,6 +31,7 @@ export type LeadComFactos = Pick<
   Lead,
   | 'canton' | 'job' | 'bettingExperience' | 'tratamento' | 'nomePerguntado'
   | 'atencao' | 'tempoSuica' | 'oficioPedrito' | 'perguntasFeitas'
+  | 'casasComConta' | 'casaOferecida' | 'contaConfirmada'
 >;
 
 /** Uma pergunta do funil, com a resposta quando ja houver. */
@@ -256,4 +257,38 @@ export function resolveHouseLink(persona: Persona, houseId: string): string {
 
   const house = persona.houses.find((entry) => entry.id === houseId);
   return house?.link || persona.defaultLink;
+}
+
+/** A casa com este id, ou null. Mesma tabela que o `resolveHouseLink` le. */
+export function resolveHouse(persona: Persona, houseId: string): PersonaHouse | null {
+  if (!houseId) return null;
+  return persona.houses.find((entry) => entry.id === houseId) ?? null;
+}
+
+/**
+ * A primeira casa que o lead ainda NAO tem e que esta mesmo configurada.
+ *
+ * As casas estao por ordem de prioridade comercial — a principal primeiro —
+ * portanto "a primeira que serve" ja e a escolha certa, sem mais regra nenhuma.
+ *
+ * As duas condicoes valem as duas:
+ *
+ * - `sem conta` e o que faz o funil andar. Um lead que ja tinha conta numa casa
+ *   nao gera comissao de registo; insistir nela e trabalho sem retorno, e foi
+ *   assim que se perdeu o lead que disse tres vezes "ja tenho conta".
+ * - `com link` e o que impede uma casa por configurar de ser oferecida. As
+ *   variaveis das casas sao opcionais e ficam vazias por omissao: sem esta
+ *   condicao, o lead recebia uma mensagem a mandar registar-se num link em
+ *   branco. Hoje mesmo, duas das tres casas do Ivan estao assim.
+ *
+ * Devolve null quando nao sobra nenhuma — e o sinal de que a conversa tem de
+ * passar para as maos de uma pessoa. Tambem devolve null para uma persona de
+ * casa unica, que nao tem casas nenhumas nesta lista.
+ */
+export function casaLivre(persona: Persona, comConta: readonly string[]): PersonaHouse | null {
+  return (
+    persona.houses.find(
+      (casa) => !comConta.includes(casa.id) && casa.link.trim().length > 0,
+    ) ?? null
+  );
 }

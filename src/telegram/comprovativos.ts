@@ -81,6 +81,18 @@ export async function avisarDaEntrega(
   persona: IdPersona,
   lead: Lead,
   incoming: string,
+  /**
+   * Porque e que a conversa foi entregue.
+   *
+   * A omissao e o texto de sempre — o lead que falou em dinheiro que nao tem —
+   * para quem ja chama esta funcao nao mudar. O `detalhe` e o que da a quem vai
+   * pegar na conversa o que ele precisa sem abrir a base de dados: no caso das
+   * casas, quais e que ja estao queimadas. Sem isso ele le "ja tenho conta" e
+   * fica exactamente onde o bot ficou.
+   */
+  motivo: { titulo: string; detalhe?: string } = {
+    titulo: 'o lead falou em dinheiro que nao tem',
+  },
 ): Promise<void> {
   const destinos = destinosDe(persona);
   const avisador = avisadores.get(persona);
@@ -94,7 +106,8 @@ export async function avisarDaEntrega(
   }
 
   const texto =
-    'Conversa entregue a ti — o lead falou em dinheiro que nao tem\n\n' +
+    `Conversa entregue a ti — ${motivo.titulo}\n\n` +
+    (motivo.detalhe ? `${motivo.detalhe}\n\n` : '') +
     `Persona: ${persona}\n` +
     `Nome: ${lead.firstName || '(sem nome)'}\n` +
     `Username: ${lead.username ? `@${lead.username}` : '(sem username)'}\n` +

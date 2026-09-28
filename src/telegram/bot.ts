@@ -489,14 +489,27 @@ async function recordCanton(
  *
  * A escrita e ignorada se ja houver resposta: a primeira e a boa.
  */
-async function recordJob(chatId: number, known: string | null, directive: SalesDirective): Promise<void> {
+async function recordJob(
+  chatId: number,
+  /**
+   * De quem e este lead.
+   *
+   * Por argumento e nao pela constante do modulo: este ficheiro e o bot do El
+   * Pedrito, mas o `turnoDeCanal` traz aqui os turnos do Ivan. Com a constante,
+   * tudo o que o Ivan aprendia era gravado na linha do El Pedrito — a chave e
+   * `(chat_id, persona)` — e o funil dele voltava a perguntar o que ja sabia.
+   */
+  persona: IdPersona,
+  known: string | null,
+  directive: SalesDirective,
+): Promise<void> {
   if (known) return;
 
   const job = directive.job.trim();
   if (job.length === 0) return;
 
-  await setJob(chatId, PERSONA, job);
-  log.info(`trabalho registado chat=${chatId} -> ${job}`);
+  await setJob(chatId, persona, job);
+  log.info(`trabalho registado chat=${chatId} (${persona}) -> ${job}`);
 }
 
 /**
@@ -507,13 +520,17 @@ async function recordJob(chatId: number, known: string | null, directive: SalesD
  * por isso escrever por cima nao faz mal nenhum.
  */
 function recordFactosNovos(chatId: number, lead: Lead, directive: SalesDirective): void {
+  // A persona vem do proprio lead: ele sabe de quem e, e assim nao ha um
+  // segundo sitio onde a enganar. Ver o comentario no `recordJob`.
+  const persona = lead.persona;
+
   if (!lead.tratamento && directive.nome) {
     const limpo = extrairNome(directive.nome);
-    if (limpo) void setTratamento(chatId, PERSONA, limpo);
+    if (limpo) void setTratamento(chatId, persona, limpo);
   }
 
-  if (!lead.atencao && directive.atencao) void setAtencao(chatId, PERSONA, directive.atencao);
-  if (!lead.tempoSuica && directive.tempoSuica) void setTempoSuica(chatId, PERSONA, directive.tempoSuica);
+  if (!lead.atencao && directive.atencao) void setAtencao(chatId, persona, directive.atencao);
+  if (!lead.tempoSuica && directive.tempoSuica) void setTempoSuica(chatId, persona, directive.tempoSuica);
 }
 
 /**
@@ -525,6 +542,8 @@ function recordFactosNovos(chatId: number, lead: Lead, directive: SalesDirective
  */
 async function recordExperience(
   chatId: number,
+  /** De quem e este lead. Ver o comentario no `recordJob`. */
+  persona: IdPersona,
   known: string | null,
   incoming: string,
   directive: SalesDirective,
@@ -537,8 +556,8 @@ async function recordExperience(
     detectBettingExperience(incoming) ?? detectBettingExperience(directive.bettingExperience);
   if (!detected) return;
 
-  await setBettingExperience(chatId, PERSONA, detected);
-  log.info(`experiencia registada chat=${chatId} -> ${detected}`);
+  await setBettingExperience(chatId, persona, detected);
+  log.info(`experiencia registada chat=${chatId} (${persona}) -> ${detected}`);
 }
 
 /**
@@ -546,13 +565,20 @@ async function recordExperience(
  * hora ja passada e do dia seguinte: quem diz "as 18h" as 19h esta a falar de
  * amanha, nao de ha uma hora.
  */
-async function recordPromise(chatId: number, directive: SalesDirective): Promise<void> {
+async function recordPromise(
+  chatId: number,
+  /** De quem e este lead. Ver o comentario no `recordJob`. */
+  persona: IdPersona,
+  directive: SalesDirective,
+): Promise<void> {
   if (!directive.promisedTime) return;
   if (directive.shouldStop) return;
 
   const when = nextOccurrenceUtc(directive.promisedTime, env.REMARKETING_TIMEZONE);
-  await setDepositPromise(chatId, PERSONA, when, directive.promisedTime);
-  log.info(`promessa registada chat=${chatId} para ${directive.promisedTime} (UTC ${when})`);
+  await setDepositPromise(chatId, persona, when, directive.promisedTime);
+  log.info(
+    `promessa registada chat=${chatId} (${persona}) para ${directive.promisedTime} (UTC ${when})`,
+  );
 }
 
 /**
@@ -708,7 +734,7 @@ async function runFunnelTurn(
         stopTyping();
 
         log.info(`conversa entregue a mao chat=${chatId}: o lead falou em nao ter dinheiro`);
-        await avisarDaEntrega(PERSONA, current, incoming);
+        await avisarDaEntrega(idPersona, current, incoming);
         return;
       }
 
@@ -721,10 +747,10 @@ async function runFunnelTurn(
       });
 
       await advanceStage(chatId, idPersona, directive.shouldStop ? 'perdido' : directive.stage);
-      recordPromise(chatId, directive);
+      recordPromise(chatId, idPersona, directive);
       recordCanton(chatId, persona, current.canton, incoming, directive);
-      recordJob(chatId, current.job, directive);
-      recordExperience(chatId, current.bettingExperience, incoming, directive);
+      recordJob(chatId, idPersona, current.job, directive);
+      recordExperience(chatId, idPersona, current.bettingExperience, incoming, directive);
       recordFactosNovos(chatId, current, directive);
 
       // A pergunta que este turno tinha para fazer fica marcada como FEITA,

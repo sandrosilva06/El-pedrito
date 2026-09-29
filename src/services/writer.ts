@@ -323,7 +323,7 @@ export function buildDirectiveBlock(
   // O nome da casa acompanha o link, mas SO para quem tem mais do que uma.
   //
   // Sem isto o redator so conhecia o `persona.platformName`, que e fixo na casa
-  // principal: a partir da segunda, o Ivan mandava o link do 22 Casino a dizer
+  // principal: a partir da segunda, o Ivan mandava o link do Safe Casino a dizer
   // "regista-te na Plan Bet". Numa persona de casa unica nao ha ambiguidade
   // nenhuma para desfazer, e a frase fica byte a byte como estava — o El
   // Pedrito esta a converter com trafego pago e nao se lhe toca.

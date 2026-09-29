@@ -172,16 +172,21 @@ const schema = z
      */
     IVAN_MAX_BUBBLES: intFromString(4, 1, 8),
     /**
-     * As casas do Ivan. A Plan Bet e a principal: e por ela que o funil comeca,
-     * e as outras so entram se o lead ja la tiver conta.
+     * As casas do Ivan, por ordem: principal, secundaria, terciaria.
      *
-     * Vazias por omissao, como todas as afirmacoes configuraveis deste projecto:
-     * so se configura o que existe mesmo. SEM a Plan Bet o Ivan nao tem para
-     * onde mandar ninguem e nao converte nada.
+     * O funil comeca sempre pela Plan Bet. As outras duas so entram quando o
+     * lead diz que ja tem conta na anterior — quem ja tinha conta numa casa
+     * afiliada nao gera comissao de registo, portanto insistir nela e trabalho
+     * sem retorno.
+     *
+     * Vazias por omissao, como todas as afirmacoes configuraveis deste
+     * projecto: so se configura o que existe mesmo. Uma casa com o link vazio
+     * NUNCA e oferecida, portanto pode estar declarada antes de a variavel
+     * estar posta. SEM a Plan Bet o Ivan nao tem para onde mandar ninguem.
      */
     PLANBET_LINK: optionalString.transform((value) => value ?? ''),
-    CASINO22_LINK: optionalString.transform((value) => value ?? ''),
-    GINJA_LINK: optionalString.transform((value) => value ?? ''),
+    SAFECASINO_LINK: optionalString.transform((value) => value ?? ''),
+    AZURSLOT_LINK: optionalString.transform((value) => value ?? ''),
     /**
      * O token do bot do Ivan. VAZIO = o Ivan nao arranca, e o El Pedrito nao da
      * por nada. E o interruptor: enquanto isto nao estiver posto, nada do Ivan

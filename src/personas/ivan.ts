@@ -16,10 +16,22 @@ import { casaLivre, proximaPerguntaDe, resolveHouse } from './types';
 import type { LeadComFactos, Persona, PersonaHouse, PerguntaFunil } from './types';
 import type { Lead, StoredMessage } from '../db/database';
 
+/**
+ * As casas do Ivan, POR ORDEM DE PRIORIDADE.
+ *
+ * A ordem e a regra: o `casaLivre` devolve a primeira que o lead ainda nao
+ * tenha e que esteja configurada, portanto mexer nesta lista e mexer no funil.
+ * A Plan Bet e a principal; o Safe Casino so entra quando o lead ja tem conta
+ * na Plan Bet, e o Azur Slot so quando ja tem nas duas.
+ *
+ * Uma casa com `link` vazio nunca e oferecida — o `casaLivre` salta-a. E o que
+ * permite ter uma casa aqui declarada antes de a variavel estar posta no
+ * Render, sem que ninguem receba um link em branco.
+ */
 const houses: PersonaHouse[] = [
   { id: 'plan_bet', label: 'Plan Bet', link: env.PLANBET_LINK },
-  { id: '22_casino', label: '22 Casino', link: env.CASINO22_LINK },
-  { id: 'ginja', label: 'Ginja Casino', link: env.GINJA_LINK },
+  { id: 'safe_casino', label: 'Safe Casino', link: env.SAFECASINO_LINK },
+  { id: 'azur_slot', label: 'Azur Slot', link: env.AZURSLOT_LINK },
 ];
 
 const STRATEGIST_SYSTEM = `Es o ESTRATEGISTA de um funil por Telegram do ${env.IVAN_NAME},

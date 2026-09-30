@@ -147,6 +147,21 @@ export interface Persona {
   platformName: string;
 
   /**
+   * Bonus da casa, colado a MENSAGEM QUE DIZ O DEPOSITO MINIMO — e so a essa.
+   *
+   * Vive aqui, ao lado do `minDeposit`, porque anda agarrado a ele: e a mesma
+   * mensagem que leva o link, o valor minimo e o bonus. Estar em codigo e nao
+   * numa regra de prompt e o que garante o "so a essa": uma instrucao do
+   * genero "so falas do bonus quando disseres o minimo" e uma sugestao forte,
+   * e o modelo acaba por o enfiar noutras mensagens. Assim o texto so existe
+   * quando o link vai mesmo sair.
+   *
+   * Vazio ou ausente, nao se cola nada. Como o `complianceNote`, e uma decisao
+   * de cada influencer: o El Pedrito nao tem bonus nenhum.
+   */
+  bonusClaim?: string;
+
+  /**
    * Aviso legal colado a mensagem que leva o link de afiliado. Vazio, nao se
    * cola nada.
    *

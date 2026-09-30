@@ -330,13 +330,21 @@ export function buildDirectiveBlock(
   const nomeDaCasa =
     persona.houses.length > 0 ? ` da ${casaDoTurno?.label ?? persona.platformName}` : '';
 
+  // O bonus da casa sai NESTA mensagem e so nesta: e a que diz o deposito
+  // minimo. Fica preso ao `sendLink` em codigo, e nao a uma regra no prompt,
+  // porque "so falas do bonus quando disseres o minimo" e uma sugestao forte —
+  // o modelo cumpre-a quase sempre, e o "quase" e o bonus repetido em cinco
+  // mensagens seguidas, que e o que faz aquilo soar a anuncio.
+  const bonusRule =
+    sendLink && link && persona.bonusClaim ? `\nDiz tambem, em uma frase: ${persona.bonusClaim}.` : '';
+
   const linkRule =
     sendLink && link
       ? `Inclui o link de registo${nomeDaCasa} exatamente assim: ${link}\n` +
         `Diz tambem: o deposito minimo e ${persona.minDeposit}; para acompanhar todas as ` +
         `entradas do dia sem esgotar a banca o ideal e comecar com ${persona.suggestedDeposit} ` +
         `(conselho teu, nao requisito); e que basta mandares o print do deposito para ` +
-        'teres acesso imediato ao VIP.'
+        `teres acesso imediato ao VIP.${bonusRule}`
       : 'NAO incluas nenhum link nesta mensagem.';
 
   // Vazio na persona significa que este influencer nao cola aviso nenhum — e

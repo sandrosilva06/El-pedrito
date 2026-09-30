@@ -145,7 +145,7 @@ const schema = z
     // IVAN_ nao e decoracao: as variaveis sem prefixo continuam a ser do El
     // Pedrito, e uma partilhada fazia um influencer herdar os numeros do outro.
     IVAN_NAME: optionalString.transform((value) => value ?? 'Ivan Rodrigues'),
-    IVAN_MIN_DEPOSIT: optionalString.transform((value) => value ?? '25€'),
+    IVAN_MIN_DEPOSIT: optionalString.transform((value) => value ?? '30€'),
     /** O nome do grupo VIP dele, como o lead o ve. */
     IVAN_GROUP_NAME: optionalString.transform((value) => value ?? 'VIP dos sinais'),
     /**

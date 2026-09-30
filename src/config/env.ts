@@ -167,6 +167,26 @@ const schema = z
      */
     IVAN_WITHDRAWAL_CLAIM: optionalString.transform((value) => value ?? ''),
     /**
+     * O bonus de deposito da casa, se houver um a decorrer.
+     *
+     * Fica em variavel, e nao no prompt, por duas razoes. E uma afirmacao de
+     * facto sobre a promocao de um terceiro, dita a um lead ANTES de ele por
+     * dinheiro — a responsabilidade e de quem opera, como em todas as outras
+     * CLAIM deste ficheiro. E porque uma promocao ACABA: assim tira-se do ar
+     * no painel do Render, sem deploy nenhum.
+     *
+     * VAZIA, o Ivan nao fala de bonus nenhum — e o `IVAN_ROLLOVER_CLAIM` fica
+     * calado com ela, porque nao ha rollover sem bonus de que falar.
+     */
+    IVAN_BONUS_CLAIM: optionalString.transform((value) => value ?? ''),
+    /**
+     * O que responder se o lead perguntar pelo rollover do bonus.
+     *
+     * So sai a pergunta dele: e uma resposta, nao um argumento de venda. E um
+     * compromisso de quem opera para com o lead, por isso e dele a palavra.
+     */
+    IVAN_ROLLOVER_CLAIM: optionalString.transform((value) => value ?? ''),
+    /**
      * Quantas bolhas seguidas o Ivan manda. Mais do que o El Pedrito porque ele
      * escreve aos gritos curtos: 15 palavras por mensagem.
      */
